@@ -1,0 +1,32 @@
+{
+  "name": "cka-lab",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Self-hosted CKA learning platform: React SPA + NestJS microservices + PostgreSQL",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build:packages": "npm run build -w @cka/contracts -w @cka/service-kit -w @cka/auth-kit",
+    "build": "npm run build:packages && npm run build -w @cka/ms-identity -w @cka/ms-learning -w @cka/web",
+    "typecheck": "npm run build:packages && npm run typecheck --workspaces --if-present",
+    "test": "npm run build:packages && npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "db:up": "docker compose up -d postgres",
+    "dev:identity": "npm run start:dev -w @cka/ms-identity",
+    "dev:learning": "npm run start:dev -w @cka/ms-learning",
+    "dev:web": "npm run dev -w @cka/web",
+    "dev": "npm run build:packages && concurrently -k -n identity,learning,web -c blue,green,magenta \"npm:dev:identity\" \"npm:dev:learning\" \"npm:dev:web\"",
+    "keys:generate": "node scripts/generate-jwt-keys.mjs",
+    "content:check": "npm run content:check -w @cka/ms-learning",
+    "setup:env": "node scripts/setup-env.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,131 @@
+# Full stack on one machine:  cp .env.example .env  (or: npm run setup:env)
+#                              docker compose up --build
+# Then open ${PUBLIC_URL} (default http://localhost:8080).
+#
+# The topology mirrors the Kubernetes deployment on purpose:
+#
+#   browser ──► edge (nginx, stands in for the Ingress)
+#                 ├─ /api/identity/* ─► ms-identity ─┐
+#                 ├─ /api/learning/* ─► ms-learning ─┼─► postgres (identity db, learning db)
+#                 └─ /*              ─► web (SPA)    │
+#               ms-learning ── JWKS ──► ms-identity ─┘   (internal only)
+#
+# Only `edge` (and Postgres, bound to 127.0.0.1 for psql) publish ports.
+
+name: cka-lab
+
+x-node-service: &node-service
+  restart: unless-stopped
+  read_only: true
+  tmpfs: [/tmp]
+  security_opt: ["no-new-privileges:true"]
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      IDENTITY_DB_PASSWORD: ${IDENTITY_DB_PASSWORD:?set IDENTITY_DB_PASSWORD in .env}
+      LEARNING_DB_PASSWORD: ${LEARNING_DB_PASSWORD:?set LEARNING_DB_PASSWORD in .env}
+    volumes:
+      # Named volume: data survives `docker compose down` (not `down -v`).
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/compose/postgres-init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  ms-identity:
+    <<: *node-service
+    image: ${IMAGE_PREFIX:-cka-lab}/ms-identity:${IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: apps/ms-identity/Dockerfile
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PORT: "3001"
+      DATABASE_HOST: postgres
+      DATABASE_USER: identity
+      DATABASE_NAME: identity
+      DATABASE_PASSWORD: ${IDENTITY_DB_PASSWORD}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:?run npm run setup:env or set JWT_PRIVATE_KEY}
+      JWT_KEY_ID: ${JWT_KEY_ID:-key-1}
+      TRUST_PROXY_HOPS: "1"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+
+  ms-learning:
+    <<: *node-service
+    image: ${IMAGE_PREFIX:-cka-lab}/ms-learning:${IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: apps/ms-learning/Dockerfile
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PORT: "3002"
+      DATABASE_HOST: postgres
+      DATABASE_USER: learning
+      DATABASE_NAME: learning
+      DATABASE_PASSWORD: ${LEARNING_DB_PASSWORD}
+      JWKS_URL: http://ms-identity:3001/.well-known/jwks.json
+      TRUST_PROXY_HOPS: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ms-identity:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+
+  web:
+    image: ${IMAGE_PREFIX:-cka-lab}/web:${IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      APP_NAME: ${APP_NAME:-CKA Lab}
+
+  edge:
+    image: nginxinc/nginx-unprivileged:1.29-alpine
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ./deploy/compose/edge.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "${EDGE_PORT:-8080}:8080"
+    depends_on:
+      ms-identity:
+        condition: service_healthy
+      ms-learning:
+        condition: service_healthy
+      web:
+        condition: service_started
+
+volumes:
+  pgdata:

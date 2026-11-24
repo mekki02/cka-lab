@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.env
+.env.local
+.env.*.local
+!.env.example
+.DS_Store
+.claude/settings.local.json
+# Generated keys and local secrets: never commit
+secrets/
+*.pem
+# Generated content bundles
+apps/ms-learning/content-bundle/
+playwright-report/
+test-results/
