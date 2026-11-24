@@ -1,0 +1,254 @@
+---
+id: services-troubleshooting
+---
+
+"The Service doesn't work" is one of the most common tickets in real clusters and one of the most common task types in the troubleshooting domain — which carries **30%** of the exam. Guessing is slow. This lesson gives you a fixed order of checks where each step either finds the fault or rules out a whole layer, then drills it on realistic failures.
+
+<Phase step="theory" />
+
+## Think in layers
+
+A request from a client Pod to `http://web.svc-lab/` crosses five layers. Each has a distinctive failure signature:
+
+| # | Layer | Typical failure | Signature |
+|---|---|---|---|
+| 1 | **DNS** | Wrong name or namespace, CoreDNS down | `bad address 'web'` / `could not resolve host` |
+| 2 | **Service** | Wrong `port`, wrong namespace, wrong type | Connection refused on the ClusterIP, or no such Service |
+| 3 | **Endpoints** | Selector mismatch, Pods not Ready | Timeout or `connection refused`; `Endpoints:` empty |
+| 4 | **Pod** | Wrong `targetPort`, app listening on another port or on `127.0.0.1` | Endpoints present, connection refused |
+| 5 | **Network** | NetworkPolicy, broken CNI or kube-proxy | Timeout with everything above correct |
+
+The order matters: it goes from cheapest-to-check to most expensive, and from most-common to least-common cause.
+
+<Phase step="visualization" />
+
+## The decision path
+
+<Diagram
+  caption="Each question rules out a layer. Most faults are found by the third question."
+  chart={`flowchart TB
+    A[Does the name resolve from a client Pod?] -- no --> A1[DNS: name, namespace, CoreDNS]
+    A -- yes --> B[Does the Service have ready endpoints?]
+    B -- no --> B1{Pods matching the selector?}
+    B1 -- none --> B2[Fix selector or Pod labels]
+    B1 -- "yes, not Ready" --> B3[Fix readiness probe / app]
+    B -- yes --> C[Does PodIP:targetPort answer directly?]
+    C -- no --> C1[Fix targetPort / containerPort / app bind address]
+    C -- yes --> D[Does ClusterIP:port answer?]
+    D -- no --> D1[Check Service port, NetworkPolicy, kube-proxy]
+    D -- yes --> E[Problem is client-side or above HTTP]`}
+/>
+
+<Phase step="command-line" />
+
+## The commands, in order
+
+Keep a debugging Pod open in the client's namespace. `busybox` has `nslookup` and `wget`; `nicolaka/netshoot` adds `curl`, `dig`, `nc` and more:
+
+```bash
+kubectl -n svc-lab run debug --image=nicolaka/netshoot --restart=Never -- sleep 3600
+kubectl -n svc-lab exec -it debug -- bash
+```
+
+**1 · DNS**
+
+<Terminal
+  command="nslookup web"
+  prompt="debug#"
+  output={`Server:         10.96.0.10
+Address:        10.96.0.10#53
+
+Name:   web.svc-lab.svc.cluster.local
+Address: 10.96.73.20`}
+/>
+
+If this fails but `nslookup kubernetes.default` works, the problem is the name or the namespace, not DNS itself.
+
+**2 · Service definition** — check the namespace, type and ports:
+
+<Terminal
+  command="kubectl -n svc-lab get svc web -o wide"
+  output={`NAME   TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)   AGE   SELECTOR
+web    ClusterIP   10.96.73.20   <none>        80/TCP    3h    app=web`}
+/>
+
+**3 · Endpoints and the Pods behind the selector** — the single most productive check:
+
+<Terminal
+  command={`kubectl -n svc-lab get endpointslices -l kubernetes.io/service-name=web
+kubectl -n svc-lab get pods -l app=web -o wide`}
+  output={`NAME        ADDRESSTYPE   PORTS   ENDPOINTS                AGE
+web-hk2vd   IPv4          80      10.244.1.12,10.244.2.9   3h
+NAME                   READY   STATUS    RESTARTS   AGE   IP            NODE          NOMINATED NODE   READINESS GATES
+web-6d4b9c6f7b-8m2kq   1/1     Running   0          3h    10.244.1.12   cka-worker    <none>           <none>
+web-6d4b9c6f7b-q4tlz   1/1     Running   0          3h    10.244.2.9    cka-worker2   <none>           <none>`}
+/>
+
+Using the Service's own selector in `-l` is the point: it shows exactly what the Service sees. `ENDPOINTS <unset>` or empty means layer 3.
+
+**4 · Bypass the Service** — talk to one Pod directly on the target port:
+
+<Terminal
+  command="curl -s -o /dev/null -w '%{http_code}\n' http://10.244.1.12:80/"
+  prompt="debug#"
+  output="200"
+/>
+
+If the Pod answers directly but not through the Service, the Pod is fine and the fault is in the Service's ports or the network path. If the Pod does **not** answer directly, the Service was never the problem: check what the container listens on.
+
+<Terminal
+  command={`kubectl -n svc-lab get pod web-6d4b9c6f7b-8m2kq -o jsonpath='{.spec.containers[*].ports}{"\\n"}'`}
+  output={`[{"containerPort":80,"protocol":"TCP"}]`}
+/>
+
+`containerPort` is **documentation**: Kubernetes does not use it to route traffic, and an application can listen on a different port than declared. The truth is what the process binds. In the debug Pod, `nc -zv 10.244.1.12 8080` or `curl` against candidate ports settles it.
+
+**5 · Network policies and kube-proxy**
+
+<Terminal
+  command={`kubectl -n svc-lab get networkpolicy
+kubectl -n kube-system get pods -l k8s-app=kube-proxy -o wide`}
+  output={`NAME          POD-SELECTOR   AGE
+default-deny   <none>         5m
+NAME               READY   STATUS    RESTARTS   AGE   IP           NODE                NOMINATED NODE   READINESS GATES
+kube-proxy-7v6mt   1/1     Running   0          2d    172.18.0.2   cka-worker          <none>           <none>
+kube-proxy-g5n2k   1/1     Running   0          2d    172.18.0.4   cka-control-plane   <none>           <none>
+kube-proxy-x9q8d   1/1     Running   0          2d    172.18.0.3   cka-worker2         <none>           <none>`}
+/>
+
+A policy with an empty pod selector (`<none>`) applies to **every** Pod in the namespace. NetworkPolicies have their own module; for now, remember that "everything looks right but it times out" is often a policy.
+
+<Callout type="tip" title="port-forward is not a Service test">
+`kubectl port-forward svc/web 8080:80` picks **one** Pod and tunnels through the API server and kubelet. It bypasses kube-proxy and NetworkPolicies, so "port-forward works" proves only that one Pod answers.
+</Callout>
+
+<Phase step="example" />
+
+## Worked example: three faults, one Service
+
+The manifest below has three independent bugs. Read it and find them before reading the walkthrough.
+
+```yaml title="api.yaml"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: svc-lab
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: api, tier: backend }
+  template:
+    metadata:
+      labels: { app: api, tier: backend }
+    spec:
+      containers:
+        - name: api
+          image: registry.k8s.io/e2e-test-images/agnhost:2.53
+          args: ["netexec", "--http-port=8080"]
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: svc-lab
+spec:
+  selector: { app: api, tier: frontend }
+  ports:
+    - port: 80
+      targetPort: 80
+```
+
+1. **Selector:** the Service selects `tier: frontend`; the Pods are `tier: backend`. No Pod matches → no endpoints.
+2. **Readiness probe port:** `agnhost netexec` serves HTTP on `8080`, but the probe checks `8000`. Even with a correct selector, Pods would stay `0/1` Ready → still no endpoints.
+3. **targetPort:** the Service forwards to `80`, but nothing listens there → connection refused once 1 and 2 are fixed.
+
+Fixing in the order the decision path finds them:
+
+```bash
+kubectl -n svc-lab patch svc api -p '{"spec":{"selector":{"app":"api","tier":"backend"}}}'
+kubectl -n svc-lab get pods -l app=api,tier=backend     # 0/1 READY -> probe problem
+kubectl -n svc-lab patch deploy api --type=json \
+  -p '[{"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/httpGet/port","value":8080}]'
+kubectl -n svc-lab rollout status deploy api
+kubectl -n svc-lab patch svc api -p '{"spec":{"ports":[{"port":80,"targetPort":8080}]}}'
+kubectl -n svc-lab exec debug -- curl -s api/hostname
+```
+
+The last command prints the name of the Pod that answered — the Service works end to end.
+
+<Phase step="guided" />
+
+## Guided exercise
+
+<Exercise kind="guided" title="Run the decision path on the worked example">
+
+Apply `api.yaml` unchanged. Then, **without looking at the YAML**, use only the five checks above — DNS, Service, endpoints, direct Pod, network — and write down at each step what you observed and which layer it rules out. You should reach each of the three faults through a different check: empty endpoints (selector), `0/1` Ready (probe), and a refused direct connection to `PodIP:80` (targetPort).
+
+</Exercise>
+
+<Phase step="challenge" />
+
+## Independent challenge
+
+<LabLink id="services-broken-shop">Open the troubleshooting lab: “The shop is down”</LabLink>
+
+The lab breaks a small application in ways you have not seen in this lesson. Use the decision path and do not reveal solutions until you have a hypothesis for every task.
+
+<Phase step="troubleshooting" />
+
+## Symptom → cause reference
+
+| What you see | Most likely cause | Confirm with |
+|---|---|---|
+| `bad address` / NXDOMAIN | Wrong name or namespace | `nslookup <svc>.<ns>` |
+| Timeout, `Endpoints:` empty | Selector mismatch | `kubectl get pods -l <service selector>` |
+| Timeout, Pods `0/1` Ready | Readiness probe / app not ready | `kubectl describe pod` → Events |
+| `connection refused`, endpoints present | `targetPort` ≠ listening port | `curl PodIP:targetPort` from a Pod |
+| Works by Pod IP, not by ClusterIP | Service `port` mismatch, or kube-proxy down | `kubectl get svc -o yaml`, kube-proxy Pods |
+| Works from one namespace only | NetworkPolicy | `kubectl get netpol -A` |
+| App answers inside the Pod only (`localhost`) | Process bound to `127.0.0.1` | `kubectl exec <pod> -- netstat -tlnp` (if available) |
+
+<Phase step="solution" />
+
+## Habits that make this fast in the exam
+
+- **Always pass `-n`.** Half of "missing" Services are in another namespace.
+- **Read the selector off the Service** (`kubectl get svc -o wide` shows it) and reuse it with `-l`.
+- **Fix, then re-run the same check** that found the fault before moving on.
+- **Prefer `kubectl patch` or `kubectl edit`** over deleting and recreating, so you cannot lose fields such as a pinned `nodePort`.
+
+<Phase step="check" />
+
+## Knowledge check
+
+<KnowledgeCheck
+  question="Endpoints are listed for a Service, and curl to PodIP:targetPort from a debug Pod is refused. Where is the fault?"
+  options={['In the Service selector', 'In CoreDNS', 'In the Pod: nothing listens on targetPort (wrong targetPort or app port)', 'In kube-proxy']}
+  answer={2}
+  explanation="The request never went through the Service, so the Service is ruled out. The container is not listening on that port (or only on 127.0.0.1)."
+/>
+
+<KnowledgeCheck
+  question="kubectl port-forward svc/web 8080:80 works from your laptop, but other Pods time out calling web. Which is the least likely cause?"
+  options={['A NetworkPolicy blocking the client namespace', 'A broken kube-proxy on the client node', 'The web container not listening on its port', 'The clients using a wrong namespace in the name']}
+  answer={2}
+  explanation="port-forward reached a web Pod and got an answer, so the container is listening. It bypassed kube-proxy and NetworkPolicies, which remain suspects, as does the name clients use."
+/>
+
+<KnowledgeCheck
+  question="Which single command most often reveals a Service fault?"
+  options={['kubectl get nodes', 'kubectl get pods -l <the Service selector> -n <namespace>', 'kubectl logs -n kube-system <coredns pod>', 'kubectl get events -A']}
+  answer={1}
+  explanation="It shows at once whether any Pod matches the selector and whether they are Ready — the two causes of empty endpoints."
+/>
+
+<QuizLink id="services-networking-quiz">Take the Services module quiz</QuizLink>
+
+## Clean up
+
+```bash
+kubectl delete namespace svc-lab
+```

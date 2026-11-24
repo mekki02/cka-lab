@@ -1,0 +1,18 @@
+# The practice cluster every lab assumes:
+#
+#   kind create cluster --name cka --config deploy/kind/cka-cluster.yaml
+#   kubectl config use-context kind-cka
+#
+# One control plane and two workers, so scheduling, draining, taints and
+# multi-node networking behave like a real cluster. Disposable: delete it with
+#   kind delete cluster --name cka
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
+networking:
+  # kind's defaults, written out because lessons refer to them.
+  podSubnet: 10.244.0.0/16
+  serviceSubnet: 10.96.0.0/16

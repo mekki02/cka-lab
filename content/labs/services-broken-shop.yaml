@@ -1,0 +1,178 @@
+id: services-broken-shop
+title: "The shop is down: debugging Services"
+module: services
+type: troubleshooting
+difficulty: intermediate
+minutes: 40
+environment:
+  cluster: kind
+  destructive: false
+  requirements:
+    - A practice cluster with a working CNI and CoreDNS (the course kind cluster is fine)
+    - kubectl configured for that cluster
+scenario: |
+  The small online shop in namespace `shop` stopped working after a "harmless refactoring".
+  The `frontend` calls the `catalog` API at `http://catalog/`, and the `catalog` API is meant to be
+  reachable from the `monitoring` namespace too. Nobody remembers what changed.
+
+  Your job: get every request path working again **without deleting and recreating** the Services
+  or Deployments — fix them in place, as you would in production.
+objectives:
+  - Restore `frontend` → `catalog` traffic
+  - Make `catalog` reachable from the `monitoring` namespace by its correct name
+  - Make the `frontend` reachable from inside the cluster on port 80
+setup:
+  description: |
+    Run this to create the broken environment. It only touches the `shop` and `monitoring` namespaces.
+  commands: |
+    kubectl create namespace shop
+    kubectl create namespace monitoring
+    cat <<'EOF' | kubectl apply -f -
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata: { name: catalog, namespace: shop }
+    spec:
+      replicas: 2
+      selector: { matchLabels: { app: catalog } }
+      template:
+        metadata: { labels: { app: catalog, tier: api } }
+        spec:
+          containers:
+            - name: catalog
+              image: registry.k8s.io/e2e-test-images/agnhost:2.53
+              args: ["netexec", "--http-port=8080"]
+              readinessProbe:
+                httpGet: { path: /healthz, port: 8080 }
+    ---
+    apiVersion: v1
+    kind: Service
+    metadata: { name: catalog, namespace: shop }
+    spec:
+      selector: { app: catalog, tier: backend }
+      ports: [{ port: 80, targetPort: 8080 }]
+    ---
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata: { name: frontend, namespace: shop }
+    spec:
+      replicas: 2
+      selector: { matchLabels: { app: frontend } }
+      template:
+        metadata: { labels: { app: frontend } }
+        spec:
+          containers:
+            - name: web
+              image: nginx:1.27
+              readinessProbe:
+                httpGet: { path: /, port: 8080 }
+    ---
+    apiVersion: v1
+    kind: Service
+    metadata: { name: frontend, namespace: shop }
+    spec:
+      selector: { app: frontend }
+      ports: [{ port: 80, targetPort: 80 }]
+    EOF
+    kubectl -n monitoring run probe --image=busybox:1.36 --restart=Never -- sleep 36000
+tasks:
+  - id: catalog-endpoints
+    title: Give `catalog` endpoints
+    description: |
+      From a Pod in `shop`, `wget -qO- -T 3 catalog/hostname` times out.
+      Find out why the `catalog` Service has no backends and fix the **Service**.
+    hints:
+      - Compare the Service's selector (`kubectl -n shop get svc catalog -o wide`) with the Pod labels (`kubectl -n shop get pods --show-labels`).
+      - Every key in the selector must match. Which key does not?
+    checks:
+      - id: has-endpoints
+        description: The Service has two ready endpoints
+        command: kubectl -n shop get endpointslices -l kubernetes.io/service-name=catalog -o jsonpath='{.items[*].endpoints[*].conditions.ready}'
+        expect: "true true"
+      - id: answers
+        description: The API answers through the Service
+        command: kubectl -n shop run t --rm -i --restart=Never --image=busybox:1.36 -- wget -qO- -T 3 catalog/hostname
+        expect: The name of a catalog Pod, e.g. catalog-5f7c9d8b6-x2kqp
+    solution: |
+      The Service selects `tier: backend` but the Pods are labelled `tier: api`. Fix the Service selector:
+
+      ```bash
+      kubectl -n shop patch svc catalog -p '{"spec":{"selector":{"app":"catalog","tier":"api"}}}'
+      kubectl -n shop get endpointslices -l kubernetes.io/service-name=catalog
+      ```
+
+      Patching the selector (instead of relabelling Pods) is right here: Pod labels come from the Deployment
+      template, so relabelled Pods would lose the label on the next rollout.
+
+  - id: frontend-ready
+    title: Make the `frontend` Pods Ready
+    description: |
+      `kubectl -n shop get pods` shows the frontend Pods `Running` but `0/1` Ready, so the `frontend`
+      Service is empty. Find the cause and fix the **Deployment**.
+    hints:
+      - "`kubectl -n shop describe pod -l app=frontend` — read the Events at the bottom."
+      - Which port does nginx listen on by default?
+    checks:
+      - id: ready
+        description: Both frontend Pods are Ready
+        command: kubectl -n shop get deploy frontend -o jsonpath='{.status.readyReplicas}'
+        expect: "2"
+    solution: |
+      The readiness probe checks port `8080`, but nginx listens on `80`. Events show
+      `Readiness probe failed: Get "http://10.244.x.y:8080/": dial tcp ... connect: connection refused`.
+
+      ```bash
+      kubectl -n shop patch deploy frontend --type=json \
+        -p '[{"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/httpGet/port","value":80}]'
+      kubectl -n shop rollout status deploy frontend
+      ```
+
+  - id: frontend-port
+    title: Reach the frontend on port 80
+    description: |
+      Confirm `frontend` serves its page from inside the cluster at `http://frontend.shop` (port 80).
+      If you fixed the previous task correctly this may already work — prove it.
+    checks:
+      - id: page
+        description: The nginx welcome page is served through the Service
+        command: kubectl -n monitoring exec probe -- wget -qO- -T 3 frontend.shop | grep -o '<title>.*</title>'
+        expect: <title>Welcome to nginx!</title>
+    solution: |
+      The `frontend` Service was correct (`port: 80` → `targetPort: 80`). Once the Pods became Ready, it had
+      endpoints and works. Verifying a fix from a *different* namespace also proves DNS and the absence of
+      blocking NetworkPolicies.
+
+  - id: monitoring-name
+    title: Call `catalog` from `monitoring`
+    description: |
+      The monitoring team's probe runs `wget -qO- catalog/hostname` from namespace `monitoring` and gets
+      `bad address 'catalog'`. They ask you to "fix DNS". Explain what is actually wrong and give them
+      the command that works.
+    hints:
+      - Is `bad address` a timeout or a name-resolution error?
+    checks:
+      - id: cross-ns
+        description: The monitoring probe reaches catalog
+        command: kubectl -n monitoring exec probe -- wget -qO- -T 3 catalog.shop/hostname
+        expect: The name of a catalog Pod, e.g. catalog-78c89f7866-jmpnz
+    solution: |
+      DNS works. A bare name is resolved in the client's own namespace (`catalog.monitoring.svc.cluster.local`),
+      where no such Service exists. Cross-namespace callers must use `catalog.shop` or the FQDN
+      `catalog.shop.svc.cluster.local`. Nothing in the cluster needs to change.
+verifyScript: |
+  #!/usr/bin/env bash
+  # Read-only checks for the "shop is down" lab.
+  pass=0; fail=0
+  check() { if eval "$2" >/dev/null 2>&1; then echo "PASS  $1"; pass=$((pass+1)); else echo "FAIL  $1"; fail=$((fail+1)); fi; }
+  check "catalog has 2 ready endpoints" \
+    "[ \"\$(kubectl -n shop get endpointslices -l kubernetes.io/service-name=catalog -o jsonpath='{.items[*].endpoints[?(@.conditions.ready==true)].addresses[0]}' | wc -w)\" -eq 2 ]"
+  check "frontend has 2 ready replicas" \
+    "[ \"\$(kubectl -n shop get deploy frontend -o jsonpath='{.status.readyReplicas}')\" = 2 ]"
+  check "frontend serves nginx from monitoring" \
+    "kubectl -n monitoring exec probe -- wget -qO- -T 3 frontend.shop | grep -q 'Welcome to nginx'"
+  check "catalog reachable as catalog.shop" \
+    "kubectl -n monitoring exec probe -- wget -qO- -T 3 catalog.shop/hostname | grep -q '^catalog-'"
+  echo "----"; echo "$pass passed, $fail failed"; [ "$fail" -eq 0 ]
+reset:
+  description: Deletes everything the lab created. Run the setup again to start over.
+  commands: |
+    kubectl delete namespace shop monitoring --wait=false

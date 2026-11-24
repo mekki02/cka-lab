@@ -1,0 +1,282 @@
+---
+id: architecture-control-plane
+---
+
+Every troubleshooting task in the exam is easier if you can answer one question instantly: **which component is responsible for this?** A Pod stuck in `Pending` is the scheduler's business; a Deployment that never creates Pods is the controller manager's; `kubectl` timing out is the API server or etcd. This lesson builds that map of the control plane — what each component owns, how they cooperate, and where they live on a kubeadm cluster.
+
+<Phase step="theory" />
+
+## One rule explains the architecture
+
+> **Every component talks only to the API server. Only the API server talks to etcd.**
+
+There is no direct line between the scheduler and the kubelet, or between the controller manager and the scheduler. Each component **watches** the API for objects it cares about and **writes** its decisions back to the API. The API server is the hub, etcd is the memory, everything else is a client.
+
+This design — many independent control loops cooperating through shared state — is why Kubernetes tolerates partial failure. If the scheduler crashes, running Pods keep running; only new Pods wait in `Pending` until it returns.
+
+## The components
+
+| Component | Owns | If it is down… |
+|---|---|---|
+| **kube-apiserver** | The REST API: authentication, authorization, admission, validation, persistence to etcd, the watch mechanism | `kubectl` fails (`connection refused` on port 6443). Workloads keep running, but nothing can change. |
+| **etcd** | The cluster's state: every object, as a consistent key-value store (Raft consensus) | The API server cannot read or write; `kubectl` errors or hangs. Losing etcd **data** loses the cluster's state. |
+| **kube-scheduler** | Assigning Pods without a `nodeName` to a node (filtering + scoring) | New Pods stay `Pending` with no scheduling events. Running Pods are unaffected. |
+| **kube-controller-manager** | Dozens of controllers: Deployment, ReplicaSet, Node, Job, EndpointSlice, ServiceAccount… | Desired state is not reconciled: scaling a Deployment does nothing, dead nodes' Pods are not replaced. |
+| **cloud-controller-manager** (cloud only) | Cloud-specific loops: LoadBalancer Services, node lifecycle, routes | LoadBalancer Services stay `<pending>`; nodes are not cleaned up. |
+
+The node-side components — **kubelet**, the **container runtime** and **kube-proxy** — are the subject of the next lesson.
+
+## The control loop
+
+Every controller runs the same pattern:
+
+1. **Observe** the current state (via a watch on the API server).
+2. **Compare** it with the desired state (the object's `spec`).
+3. **Act** to close the gap — usually by creating, updating or deleting *other* objects through the API.
+4. **Repeat** forever.
+
+A Deployment controller does not start containers. It creates a ReplicaSet. The ReplicaSet controller does not start containers either: it creates Pods. The scheduler sets `spec.nodeName` on those Pods. Only then does the kubelet on that node start containers. Each step is a different loop, reacting to the previous one's output.
+
+<Phase step="visualization" />
+
+## Who talks to whom
+
+<Diagram
+  caption="All arrows point at the API server: components watch it and write to it. etcd is only reachable through it."
+  chart={`flowchart TB
+    U[kubectl / CI / operators] -- HTTPS 6443 --> API[kube-apiserver]
+    API <-- "gRPC 2379" --> ETCD[(etcd)]
+    SCH[kube-scheduler] -- "watch unscheduled Pods / bind" --> API
+    CM[kube-controller-manager] -- "watch + reconcile" --> API
+    subgraph NODES[each node]
+      KL[kubelet] -- "watch my Pods / report status" --> API
+      KP[kube-proxy] -- "watch Services, EndpointSlices" --> API
+    end`}
+/>
+
+## From `kubectl create deployment` to a running container
+
+<Diagram
+  caption="Five independent actors, each triggered by the previous one's write."
+  chart={`sequenceDiagram
+    participant K as kubectl
+    participant A as API server + etcd
+    participant D as Deployment ctrl
+    participant R as ReplicaSet ctrl
+    participant S as scheduler
+    participant L as kubelet (node)
+    K->>A: create Deployment
+    D->>A: sees Deployment, creates ReplicaSet
+    R->>A: sees ReplicaSet, creates 3 Pods (no nodeName)
+    S->>A: sees unscheduled Pods, binds each to a node
+    L->>A: sees Pod bound to its node
+    L->>L: pulls image, starts containers via CRI
+    L->>A: reports Pod status Running / Ready`}
+/>
+
+<Phase step="command-line" />
+
+## Seeing the control plane on a kubeadm cluster
+
+On kubeadm clusters (and kind, which uses kubeadm inside), the control plane components run as **static Pods**: the kubelet on the control plane node starts them directly from manifest files, without the scheduler. They are still visible through the API as mirror Pods:
+
+<Terminal
+  command="kubectl -n kube-system get pods -o wide"
+  output={`NAME                                        READY   STATUS    RESTARTS   AGE   IP           NODE                NOMINATED NODE   READINESS GATES
+coredns-7c65d6cfc9-4zk9w                    1/1     Running   0          2d    10.244.0.3   cka-control-plane   <none>           <none>
+coredns-7c65d6cfc9-kt8hq                    1/1     Running   0          2d    10.244.0.2   cka-control-plane   <none>           <none>
+etcd-cka-control-plane                      1/1     Running   0          2d    172.18.0.4   cka-control-plane   <none>           <none>
+kindnet-6x2mf                               1/1     Running   0          2d    172.18.0.4   cka-control-plane   <none>           <none>
+kube-apiserver-cka-control-plane            1/1     Running   0          2d    172.18.0.4   cka-control-plane   <none>           <none>
+kube-controller-manager-cka-control-plane   1/1     Running   0          2d    172.18.0.4   cka-control-plane   <none>           <none>
+kube-proxy-g5n2k                            1/1     Running   0          2d    172.18.0.4   cka-control-plane   <none>           <none>
+kube-scheduler-cka-control-plane            1/1     Running   0          2d    172.18.0.4   cka-control-plane   <none>           <none>`}
+/>
+
+Static Pod names end with the **node name** (`-cka-control-plane`), and they use the node's IP (`hostNetwork: true`). The manifests live on the node:
+
+<Terminal
+  command="docker exec cka-control-plane ls /etc/kubernetes/manifests"
+  output={`etcd.yaml
+kube-apiserver.yaml
+kube-controller-manager.yaml
+kube-scheduler.yaml`}
+/>
+
+On a real (non-kind) control plane node you would `ssh` to it and run `ls /etc/kubernetes/manifests` directly. **Editing these files is how you reconfigure a component**: the kubelet notices the change and restarts the static Pod. Breaking one is also a classic exam troubleshooting task.
+
+Look at how the API server is configured — every flag is a design decision:
+
+<Terminal
+  command="docker exec cka-control-plane grep -E -- '--(etcd-servers|service-cluster-ip-range|authorization-mode|enable-admission-plugins|secure-port)' /etc/kubernetes/manifests/kube-apiserver.yaml"
+  output={`    - --authorization-mode=Node,RBAC
+    - --enable-admission-plugins=NodeRestriction
+    - --etcd-servers=https://127.0.0.1:2379
+    - --secure-port=6443
+    - --service-cluster-ip-range=10.96.0.0/16`}
+/>
+
+| Flag | Meaning |
+|---|---|
+| `--etcd-servers` | Where etcd is. Wrong value → API server crash-loops |
+| `--service-cluster-ip-range` | The CIDR ClusterIPs come from |
+| `--authorization-mode=Node,RBAC` | Node authorizer for kubelets, RBAC for everyone else |
+| `--enable-admission-plugins` | Extra admission plugins on top of the defaults |
+| `--secure-port` | The HTTPS port (6443) that kubeconfigs point at |
+
+Two quick health checks you will use constantly:
+
+<Terminal
+  command={`kubectl get --raw='/readyz?verbose' | tail -3
+kubectl get --raw='/livez'`}
+  output={`[+]poststarthook/apiservice-openapiv3-controller ok
+[+]shutdown ok
+readyz check passed
+ok`}
+/>
+
+<Callout type="note" title="kubectl get componentstatuses">
+You may meet `kubectl get componentstatuses` in older material. It has been deprecated since v1.19 and gives unreliable results. Use the `/readyz` and `/livez` endpoints and the static Pods' status instead.
+</Callout>
+
+## Talking to etcd
+
+etcd requires mutual TLS. On a kubeadm control plane node, the certificates are under `/etc/kubernetes/pki/etcd`:
+
+<Terminal
+  command={`docker exec cka-control-plane sh -c 'ETCDCTL_API=3 etcdctl \\
+  --endpoints=https://127.0.0.1:2379 \\
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \\
+  --cert=/etc/kubernetes/pki/etcd/server.crt \\
+  --key=/etc/kubernetes/pki/etcd/server.key \\
+  endpoint health'`}
+  output="https://127.0.0.1:2379 is healthy: successfully committed proposal: took = 9.84ms"
+/>
+
+<Callout type="warning">
+The kind node image does not always ship `etcdctl`. If the command is not found, run it inside the etcd Pod instead: `kubectl -n kube-system exec etcd-cka-control-plane -- etcdctl ...` with the same flags. The etcd backup lesson covers both, plus `etcdutl` for restores.
+</Callout>
+
+<Phase step="example" />
+
+## Example: watching the control loops work
+
+Stop thinking of `kubectl apply` as "running" something. Watch the chain of objects appear:
+
+```bash
+kubectl create deployment loops --image=nginx:1.27 --replicas=2
+kubectl get deploy,rs,pods -l app=loops
+kubectl get events --sort-by=.lastTimestamp | grep loops
+```
+
+<Terminal
+  command="kubectl get events --sort-by=.lastTimestamp | grep loops"
+  output={`8s   Normal   ScalingReplicaSet   deployment/loops             Scaled up replica set loops-5b9c8d7f6 from 0 to 2
+8s   Normal   SuccessfulCreate    replicaset/loops-5b9c8d7f6   Created pod: loops-5b9c8d7f6-7tqzm
+8s   Normal   SuccessfulCreate    replicaset/loops-5b9c8d7f6   Created pod: loops-5b9c8d7f6-xk2lp
+8s   Normal   Scheduled           pod/loops-5b9c8d7f6-7tqzm    Successfully assigned default/loops-5b9c8d7f6-7tqzm to cka-worker
+8s   Normal   Scheduled           pod/loops-5b9c8d7f6-xk2lp    Successfully assigned default/loops-5b9c8d7f6-xk2lp to cka-worker2
+7s   Normal   Pulled              pod/loops-5b9c8d7f6-7tqzm    Container image "nginx:1.27" already present on machine
+7s   Normal   Started             pod/loops-5b9c8d7f6-7tqzm    Started container nginx`}
+/>
+
+Each event's **source** maps to a component: `ScalingReplicaSet` comes from the Deployment controller, `SuccessfulCreate` from the ReplicaSet controller, `Scheduled` from the scheduler, `Pulled`/`Started` from the kubelet. Events are the fastest way to see which loop did — or failed to do — its job.
+
+<Phase step="guided" />
+
+## Guided exercise
+
+<Exercise kind="guided" title="Prove that the scheduler only matters for new Pods">
+
+1. Note your running Pods: `kubectl get pods -o wide -l app=loops`.
+2. Stop the scheduler by moving its static Pod manifest away (kind node shown; on a VM use `sudo mv` over ssh):
+
+   ```bash
+   docker exec cka-control-plane mv /etc/kubernetes/manifests/kube-scheduler.yaml /tmp/
+   ```
+
+3. Within ~20 seconds the `kube-scheduler-cka-control-plane` Pod disappears from `kubectl -n kube-system get pods`. Your `loops` Pods keep running.
+4. Scale up: `kubectl scale deploy loops --replicas=4`. The two new Pods stay `Pending`, and `kubectl describe pod` shows **no** scheduling events at all — nobody is even trying.
+5. Restore the scheduler and watch the Pending Pods get scheduled:
+
+   ```bash
+   docker exec cka-control-plane mv /tmp/kube-scheduler.yaml /etc/kubernetes/manifests/
+   kubectl get pods -l app=loops -w
+   ```
+
+</Exercise>
+
+<Phase step="challenge" />
+
+## Independent challenge
+
+<Exercise kind="challenge" title="Map symptoms to components">
+
+For each symptom, name the component you would inspect first and one command to do it:
+
+1. `kubectl get nodes` returns `The connection to the server 172.18.0.4:6443 was refused`.
+2. A new Deployment shows `READY 0/3`, its ReplicaSet exists, and its Pods are `Pending` with no events.
+3. `kubectl scale deploy web --replicas=5` succeeds, but no new ReplicaSet or Pods appear and the Deployment's status never changes.
+
+<Solution>
+
+1. **kube-apiserver** (or etcd underneath it). The API is unreachable, so `kubectl` cannot help: on the control plane node use `crictl ps -a | grep kube-apiserver` and `crictl logs <id>`, and check `/var/log/pods/kube-system_kube-apiserver-*`.
+2. **kube-scheduler**: no `Scheduled` *or* `FailedScheduling` events means nothing is trying to schedule. `kubectl -n kube-system get pods | grep scheduler`, then its logs.
+3. **kube-controller-manager**: the spec was stored (API works) but nobody reconciles it. `kubectl -n kube-system logs kube-controller-manager-<node>`.
+
+</Solution>
+</Exercise>
+
+<Phase step="troubleshooting" />
+
+## Troubleshooting preview: a broken API server
+
+When the API server is down, `kubectl` is useless — you debug from the node. The usual sequence on a kubeadm control plane:
+
+```bash
+sudo crictl ps -a | grep kube-apiserver          # is it restarting? note the container ID
+sudo crictl logs <container-id> 2>&1 | tail -20   # the reason is almost always in the last lines
+sudo journalctl -u kubelet --since "10 min ago" | grep -i apiserver   # if no container exists at all
+```
+
+A typo in `/etc/kubernetes/manifests/kube-apiserver.yaml` (for example an invalid flag or a wrong certificate path) produces a container that exits immediately; a YAML syntax error produces **no container at all**, and only the kubelet's journal says why. The control plane troubleshooting module drills both.
+
+<Phase step="solution" />
+
+## Summary
+
+- The API server is the only component that touches etcd; everything else watches and writes through it.
+- Controllers are independent loops: Deployment → ReplicaSet → Pods → scheduler → kubelet.
+- On kubeadm clusters the control plane runs as static Pods from `/etc/kubernetes/manifests`.
+- Events tell you which loop acted last; their absence tells you which loop is missing.
+
+<Phase step="check" />
+
+## Knowledge check
+
+<KnowledgeCheck
+  question="The kube-scheduler crashes. What happens to Pods that were already running?"
+  options={['They are evicted', 'They keep running; only new Pods wait in Pending', 'They restart on the control plane node', 'They become NotReady']}
+  answer={1}
+  explanation="Scheduling is a one-time decision recorded in spec.nodeName. Running Pods are managed by their kubelet and do not depend on the scheduler."
+/>
+
+<KnowledgeCheck
+  question="Which component writes to etcd?"
+  options={['Every controller writes directly for speed', 'Only the kube-apiserver', 'The kubelet, for Pod status', 'The scheduler, for bindings']}
+  answer={1}
+  explanation="All writes go through the API server, which validates and authorizes them. Other components never hold etcd credentials."
+/>
+
+<KnowledgeCheck
+  question="How do you change a flag of the API server on a kubeadm cluster?"
+  options={['kubectl edit deployment kube-apiserver -n kube-system', 'Edit /etc/kubernetes/manifests/kube-apiserver.yaml on the control plane node; the kubelet restarts it', 'kubeadm restart apiserver', 'Edit the kube-apiserver ConfigMap']}
+  answer={1}
+  explanation="The control plane components are static Pods. There is no Deployment to edit; the manifest file on the node is the source of truth."
+/>
+
+## Clean up
+
+```bash
+kubectl delete deployment loops
+```

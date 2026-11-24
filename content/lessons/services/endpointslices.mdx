@@ -1,0 +1,315 @@
+---
+id: endpointslices
+---
+
+The previous lessons treated "the Service's backends" as a given. This one opens the box: the **EndpointSlice** objects that hold the backends, the **readiness** rules that decide who is in them, and the node-level rules **kube-proxy** generates from them. This is the layer you debug when a Service exists, looks right, and still misbehaves.
+
+<Phase step="theory" />
+
+## From selector to EndpointSlices
+
+The **EndpointSlice controller** (part of `kube-controller-manager`) runs a loop for every Service that has a selector:
+
+1. List the Pods in the Service's namespace that match the selector.
+2. For each Pod with an IP, write an **endpoint** with its address, the node it runs on, and its **conditions**.
+3. Group endpoints into slices of at most **100** endpoints by default, labelled `kubernetes.io/service-name=<service>`.
+
+Splitting into slices matters at scale: when one Pod of a 5,000-Pod Service changes, only one small slice is rewritten and sent to every node, instead of one huge object. That was the main problem with the older Endpoints API, which kept every address in a single object and is deprecated since v1.33.
+
+## Endpoint conditions
+
+Each endpoint carries three conditions:
+
+| Condition | True when | Used for |
+|---|---|---|
+| `ready` | The Pod is Ready (all readiness probes pass) **and** not terminating | Normal load balancing |
+| `serving` | Readiness probes pass, regardless of termination | Draining: routing to terminating Pods if nothing else is available |
+| `terminating` | The Pod has a deletion timestamp | Graceful shutdown |
+
+The practical consequence: **a Pod that is `Running` but not `Ready` receives no Service traffic.** A failing readiness probe silently empties a Service. That is the intended behaviour — it is how rolling updates avoid sending requests to containers that are still starting.
+
+<Callout type="exam" title="Exam tip">
+When a Service has no endpoints, always check two things in this order: does the selector match any Pod labels, and are those Pods `READY 1/1`? `kubectl get pods -l <selector>` answers both in one command.
+</Callout>
+
+## kube-proxy: turning slices into rules
+
+kube-proxy runs on every node (as a DaemonSet on kubeadm and kind clusters). It watches Services and EndpointSlices and programs the node's packet filter in one of three modes:
+
+| Mode | Mechanism | Notes |
+|---|---|---|
+| `iptables` | NAT chains, one jump rule per endpoint, random selection | Default on Linux; what kind uses |
+| `nftables` | Same idea with nftables sets and maps | GA since v1.33; scales better than iptables |
+| `ipvs` | Kernel IPVS virtual servers | Being phased out upstream in favour of nftables |
+
+Some CNI plugins (Cilium, for example) replace kube-proxy entirely with eBPF programs. The concepts — virtual IP, Ready endpoints, per-node rewriting — stay the same.
+
+<Phase step="visualization" />
+
+## Who writes what
+
+<Diagram
+  caption="Three controllers cooperate through the API server; none of them talks to another directly."
+  chart={`flowchart LR
+    subgraph CP[control plane]
+      API[(API server / etcd)]
+      ESC[EndpointSlice controller]
+    end
+    subgraph NODE[every node]
+      KP[kube-proxy]
+      RULES[[iptables / nftables rules]]
+      KL[kubelet]
+    end
+    KL -- "Pod status: Ready true/false" --> API
+    ESC -- "watch Services + Pods" --> API
+    ESC -- "write EndpointSlices" --> API
+    KP -- "watch Services + EndpointSlices" --> API
+    KP --> RULES`}
+/>
+
+<Phase step="command-line" />
+
+## Reading an EndpointSlice
+
+<Terminal command="kubectl -n svc-lab get endpointslices -l kubernetes.io/service-name=web -o yaml">
+```text
+apiVersion: v1
+items:
+- addressType: IPv4
+  apiVersion: discovery.k8s.io/v1
+  endpoints:
+  - addresses:
+    - 10.244.1.12
+    conditions:
+      ready: true
+      serving: true
+      terminating: false
+    nodeName: cka-worker
+    targetRef:
+      kind: Pod
+      name: web-6d4b9c6f7b-8m2kq
+      namespace: svc-lab
+  - addresses:
+    - 10.244.2.9
+    conditions:
+      ready: true
+      serving: true
+      terminating: false
+    nodeName: cka-worker2
+    targetRef:
+      kind: Pod
+      name: web-6d4b9c6f7b-q4tlz
+      namespace: svc-lab
+  kind: EndpointSlice
+  metadata:
+    labels:
+      endpointslice.kubernetes.io/managed-by: endpointslice-controller.k8s.io
+      kubernetes.io/service-name: web
+    name: web-hk2vd
+    namespace: svc-lab
+  ports:
+  - name: ""
+    port: 80
+    protocol: TCP
+kind: List
+```
+</Terminal>
+
+Note that the slice's `port` is the **targetPort** (80, the container port), already resolved — not the Service port. Named target ports are resolved per Pod here, which is how Pods with different port numbers can sit behind one Service.
+
+A compact view of addresses and readiness with JSONPath:
+
+<Terminal
+  command={`kubectl -n svc-lab get endpointslices -l kubernetes.io/service-name=web \\
+  -o jsonpath='{range .items[*].endpoints[*]}{.addresses[0]}{"\\t"}{.conditions.ready}{"\\t"}{.targetRef.name}{"\\n"}{end}'`}
+  output={`10.244.1.12	true	web-6d4b9c6f7b-8m2kq
+10.244.2.9	true	web-6d4b9c6f7b-q4tlz`}
+/>
+
+## Finding kube-proxy's mode and rules
+
+<Terminal
+  command="kubectl -n kube-system get configmap kube-proxy -o jsonpath='{.data.config\\.conf}' | grep -E '^mode'"
+  output="mode: iptables"
+/>
+
+On kind you can look at the rules directly, because the nodes are containers:
+
+<Terminal
+  command="docker exec cka-worker iptables-save -t nat | grep 'svc-lab/web' | head -5"
+  output={`-A KUBE-SERVICES -d 10.96.73.20/32 -p tcp -m comment --comment "svc-lab/web cluster IP" -m tcp --dport 80 -j KUBE-SVC-HZAQ7VB4BLRSB7ZQ
+-A KUBE-SVC-HZAQ7VB4BLRSB7ZQ -m comment --comment "svc-lab/web -> 10.244.1.12:80" -m statistic --mode random --probability 0.50000000000 -j KUBE-SEP-2G6L4FCSRNJHWPMB
+-A KUBE-SVC-HZAQ7VB4BLRSB7ZQ -m comment --comment "svc-lab/web -> 10.244.2.9:80" -j KUBE-SEP-QJ5W6U3MPVE7L2KA
+-A KUBE-SEP-2G6L4FCSRNJHWPMB -p tcp -m comment --comment "svc-lab/web" -m tcp -j DNAT --to-destination 10.244.1.12:80
+-A KUBE-SEP-QJ5W6U3MPVE7L2KA -p tcp -m comment --comment "svc-lab/web" -m tcp -j DNAT --to-destination 10.244.2.9:80`}
+/>
+
+Read it top to bottom: traffic to the ClusterIP jumps to the Service chain (`KUBE-SVC-…`); that chain picks an endpoint chain (`KUBE-SEP-…`) with a random probability — 1/2 for the first of two, then the remainder for the last; the endpoint chain DNATs to `PodIP:targetPort`. Chain hashes differ on your cluster.
+
+<Callout type="warning">
+Never edit these rules by hand: kube-proxy rewrites them continuously. Reading them is a diagnostic tool, not a configuration method.
+</Callout>
+
+<Phase step="example" />
+
+## Example: a Service with manual endpoints
+
+A Service **without a selector** gets no EndpointSlices from the controller — you provide them. This gives an external system (a database VM, say) a cluster-internal Service with a stable name and port mapping:
+
+```yaml title="legacy-db.yaml"
+apiVersion: v1
+kind: Service
+metadata:
+  name: legacy-db
+  namespace: svc-lab
+spec:
+  ports:            # no selector on purpose
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: legacy-db-1
+  namespace: svc-lab
+  labels:
+    kubernetes.io/service-name: legacy-db              # links the slice to the Service
+    endpointslice.kubernetes.io/managed-by: cluster-admin  # anything but the controller's name
+addressType: IPv4
+ports:
+  - name: postgres       # must match the Service port name
+    port: 5432
+    protocol: TCP
+endpoints:
+  - addresses: ["192.168.10.25"]
+    conditions:
+      ready: true
+```
+
+Unlike `ExternalName`, this gives the external system a real ClusterIP and works with IP addresses.
+
+<Phase step="guided" />
+
+## Guided exercise: readiness controls membership
+
+<Exercise kind="guided" title="Watch a Pod leave and rejoin a Service">
+
+1. Create a Deployment whose readiness depends on a file you control:
+
+   ```yaml title="ready-demo.yaml"
+   apiVersion: apps/v1
+   kind: Deployment
+   metadata:
+     name: ready-demo
+     namespace: svc-lab
+   spec:
+     replicas: 2
+     selector:
+       matchLabels: { app: ready-demo }
+     template:
+       metadata:
+         labels: { app: ready-demo }
+       spec:
+         containers:
+           - name: web
+             image: nginx:1.27
+             readinessProbe:
+               exec:
+                 command: ["cat", "/tmp/ready"]
+               periodSeconds: 2
+   ```
+
+   ```bash
+   kubectl apply -f ready-demo.yaml
+   kubectl -n svc-lab expose deployment ready-demo --port=80
+   ```
+
+2. Both Pods are `Running` but `0/1` Ready, because `/tmp/ready` does not exist. The Service has **no ready endpoints**:
+
+   ```bash
+   kubectl -n svc-lab get pods -l app=ready-demo
+   kubectl -n svc-lab describe svc ready-demo | grep Endpoints
+   ```
+
+3. Make one Pod ready and watch its endpoint flip to `ready: true` within a few seconds:
+
+   ```bash
+   POD=$(kubectl -n svc-lab get pods -l app=ready-demo -o jsonpath='{.items[0].metadata.name}')
+   kubectl -n svc-lab exec "$POD" -- touch /tmp/ready
+   kubectl -n svc-lab get endpointslices -l kubernetes.io/service-name=ready-demo -o wide
+   ```
+
+4. Remove the file again (`rm /tmp/ready`) and confirm the endpoint drops out. The Pod is never restarted — readiness affects traffic, not the container's life.
+
+</Exercise>
+
+<Phase step="challenge" />
+
+## Independent challenge
+
+<Exercise kind="challenge" title="Name the backends of a Service, fast">
+
+Write one command that prints, for Service `web` in `svc-lab`, the **names of the Pods** currently receiving traffic, one per line — without using the Service's selector.
+
+<Solution>
+
+```bash
+kubectl -n svc-lab get endpointslices -l kubernetes.io/service-name=web \
+  -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.targetRef.name}{"\n"}{end}'
+```
+
+The filter `?(@.conditions.ready==true)` keeps only endpoints that receive traffic; `targetRef.name` is the Pod name the controller recorded.
+
+</Solution>
+</Exercise>
+
+<Phase step="troubleshooting" />
+
+## Troubleshooting
+
+<Exercise kind="troubleshooting" title="Running Pods, empty Service">
+
+`kubectl get pods` shows three `Running` Pods with the right labels, yet `describe svc` shows `Endpoints:` empty. What do you look at next, and what are the two most likely causes?
+
+<Solution>
+
+Look at the **READY** column: `0/1` means readiness probes are failing (or the Pods are terminating). Then `kubectl describe pod <pod>` and read the **Events** — you will see lines such as `Readiness probe failed: HTTP probe failed with statuscode: 404`.
+
+The two classic causes are a readiness probe pointing at the wrong **path or port**, and an application that really is not ready (for example waiting for a database). Fix the probe or the dependency; never "fix" it by removing the probe, which only moves the failure to your users.
+
+</Solution>
+</Exercise>
+
+<Callout type="mistakes">
+
+- Reading the Service port in the EndpointSlice: slices store the **target** port.
+- Assuming `Running` means "receiving traffic". Only **Ready** Pods are in rotation.
+- Creating a manual EndpointSlice without the `kubernetes.io/service-name` label — the Service never finds it.
+
+</Callout>
+
+<Phase step="check" />
+
+## Knowledge check
+
+<KnowledgeCheck
+  question="A Pod's readiness probe starts failing. What happens?"
+  options={['The kubelet restarts the container', 'The endpoint is marked not ready and the Pod stops receiving Service traffic', 'The Deployment creates a replacement Pod', 'kube-proxy deletes the Pod']}
+  answer={1}
+  explanation="Readiness only affects whether the Pod is in rotation. Restarts are the liveness probe's job."
+/>
+
+<KnowledgeCheck
+  question="Why did Kubernetes replace the Endpoints API with EndpointSlices?"
+  options={['Endpoints could not store IPv6 addresses', 'A single Endpoints object per Service had to be rewritten and redistributed to every node on any change, which does not scale', 'EndpointSlices are required for NodePort Services', 'Endpoints were only readable by cluster admins']}
+  answer={1}
+  explanation="Slices of ~100 endpoints mean one Pod change updates one small object instead of one object containing every backend."
+/>
+
+## Clean up
+
+```bash
+kubectl -n svc-lab delete deployment ready-demo && kubectl -n svc-lab delete svc ready-demo legacy-db --ignore-not-found
+kubectl -n svc-lab delete endpointslice legacy-db-1 --ignore-not-found
+```

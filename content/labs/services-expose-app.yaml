@@ -1,0 +1,118 @@
+id: services-expose-app
+title: Expose an application three ways
+module: services
+type: guided
+difficulty: beginner
+minutes: 30
+environment:
+  cluster: kind
+  destructive: false
+  requirements:
+    - The course kind cluster (or any practice cluster)
+scenario: |
+  A team deploys a small API and needs it reachable by other workloads (ClusterIP), from the nodes'
+  network for a quick demo (NodePort on a fixed port), and by name with per-Pod DNS records for a
+  client that does its own load balancing (headless).
+objectives:
+  - Create a ClusterIP Service and verify load balancing from a client Pod
+  - Create a NodePort Service on port 30090 and reach it through every node
+  - Create a headless Service and resolve the individual Pod IPs
+setup:
+  description: Creates the namespace and the API Deployment (3 replicas of agnhost's netexec, which returns its hostname on `/hostname`).
+  commands: |
+    kubectl create namespace expose-lab
+    kubectl -n expose-lab create deployment api --image=registry.k8s.io/e2e-test-images/agnhost:2.53 --replicas=3 \
+      -- /agnhost netexec --http-port=8080
+    kubectl -n expose-lab rollout status deploy/api
+tasks:
+  - id: clusterip
+    title: ClusterIP Service
+    description: |
+      Expose the Deployment as Service `api` on port **80**, forwarding to the container's port **8080**.
+      Then call `http://api/hostname` six times from a client Pod and observe different Pod names.
+
+      ```bash
+      kubectl -n expose-lab expose deployment api --port=80 --target-port=8080
+      kubectl -n expose-lab run client --rm -i --restart=Never --image=busybox:1.36 -- \
+        sh -c 'for i in 1 2 3 4 5 6; do wget -qO- api/hostname; echo; done'
+      ```
+    hints:
+      - If every request hangs, check the endpoints. Did you set `--target-port=8080`?
+    checks:
+      - id: svc
+        description: The Service forwards 80 → 8080
+        command: kubectl -n expose-lab get svc api -o jsonpath='{.spec.ports[0].port}->{.spec.ports[0].targetPort}'
+        expect: "80->8080"
+    solution: |
+      The commands in the description are the solution. Output shows a mix of the three Pod names, in random
+      order — kube-proxy picks a backend per connection.
+  - id: nodeport
+    title: NodePort on a fixed port
+    description: |
+      Create Service `api-np` of type NodePort with node port **30090** (service port 80 → target 8080).
+      `kubectl expose` cannot set the node port, so generate YAML and edit it:
+
+      ```bash
+      kubectl -n expose-lab expose deployment api --name=api-np --type=NodePort --port=80 --target-port=8080 \
+        --dry-run=client -o yaml > api-np.yaml
+      # add "nodePort: 30090" under the port entry, then:
+      kubectl apply -f api-np.yaml
+      ```
+
+      Then fetch `http://<node-ip>:30090/hostname` for **each** node IP (`kubectl get nodes -o wide`) from a client Pod.
+    checks:
+      - id: nodeport
+        description: The node port is 30090
+        command: kubectl -n expose-lab get svc api-np -o jsonpath='{.spec.ports[0].nodePort}'
+        expect: "30090"
+      - id: every-node
+        description: Every node answers (repeat with each INTERNAL-IP)
+        command: kubectl run client --rm -i --restart=Never --image=busybox:1.36 -- wget -qO- -T 3 http://<node-ip>:30090/hostname
+        expect: The name of an api Pod
+    solution: |
+      ```yaml
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: api-np
+        namespace: expose-lab
+      spec:
+        type: NodePort
+        selector:
+          app: api
+        ports:
+          - port: 80
+            targetPort: 8080
+            nodePort: 30090
+      ```
+  - id: headless
+    title: Headless Service
+    description: |
+      Create Service `api-headless` with `clusterIP: None` selecting the same Pods, then resolve it from a client Pod.
+    checks:
+      - id: no-ip
+        description: The Service has no ClusterIP
+        command: kubectl -n expose-lab get svc api-headless -o jsonpath='{.spec.clusterIP}'
+        expect: None
+      - id: dns
+        description: DNS returns one address per Pod
+        command: kubectl -n expose-lab run client --rm -i --restart=Never --image=busybox:1.36 -- nslookup api-headless
+        expect: Three "Address:" lines with Pod IPs (10.244.x.y)
+    solution: |
+      ```bash
+      kubectl -n expose-lab expose deployment api --name=api-headless --cluster-ip=None --port=8080
+      ```
+
+      `kubectl expose` accepts `--cluster-ip=None`, which is the quickest way to create a headless Service from a workload.
+verifyScript: |
+  #!/usr/bin/env bash
+  ns=expose-lab; ok=0; bad=0
+  t() { if eval "$2" >/dev/null 2>&1; then echo "PASS  $1"; ok=$((ok+1)); else echo "FAIL  $1"; bad=$((bad+1)); fi; }
+  t "api: 80 -> 8080"        "[ \"\$(kubectl -n $ns get svc api -o jsonpath='{.spec.ports[0].targetPort}')\" = 8080 ]"
+  t "api-np on 30090"        "[ \"\$(kubectl -n $ns get svc api-np -o jsonpath='{.spec.ports[0].nodePort}')\" = 30090 ]"
+  t "api-headless headless"  "[ \"\$(kubectl -n $ns get svc api-headless -o jsonpath='{.spec.clusterIP}')\" = None ]"
+  echo "----"; echo "$ok passed, $bad failed"; [ "$bad" -eq 0 ]
+reset:
+  description: Removes the lab namespace.
+  commands: |
+    kubectl delete namespace expose-lab --wait=false

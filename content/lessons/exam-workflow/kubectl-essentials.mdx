@@ -1,0 +1,324 @@
+---
+id: kubectl-essentials
+---
+
+The CKA gives you two hours for a set of hands-on tasks. Candidates rarely fail because they do not know Kubernetes; they fail because they spend eight minutes hand-typing a Deployment manifest and run out of time. This lesson is about **speed with accuracy**: generating manifests instead of writing them, finding fields instead of remembering them, and verifying instead of hoping.
+
+<Phase step="theory" />
+
+## Imperative vs declarative
+
+Kubernetes is declarative: you describe the desired state in YAML and controllers converge on it. But you do not have to **type** that YAML. Three ways to create objects:
+
+| Style | Example | Use it for |
+|---|---|---|
+| Imperative command | `kubectl create deployment web --image=nginx` | Simple objects, fastest |
+| Imperative + generate | `kubectl create deployment web --image=nginx --dry-run=client -o yaml > web.yaml` | Anything the command cannot express fully: generate, edit, apply |
+| Declarative | `kubectl apply -f web.yaml` | The final step, and everything in real life |
+
+The winning exam workflow is the middle row: **generate a skeleton, edit only what is missing, apply.**
+
+## What `--dry-run` actually does
+
+| Flag | Where it runs | Validates against the cluster? |
+|---|---|---|
+| `--dry-run=client` | Only in kubectl | No — just prints the object |
+| `--dry-run=server` | Sent to the API server, which runs admission and validation, then discards it | Yes — catches webhook and quota rejections |
+
+Use `client` to generate YAML; use `server` to test a manifest without changing anything.
+
+<Phase step="visualization" />
+
+## The fast path for every task
+
+<Diagram
+  caption="Generate, edit, apply, verify. Most tasks are a loop around these four steps."
+  chart={`flowchart LR
+    A["kubectl create ... --dry-run=client -o yaml > task.yaml"] --> B["vim task.yaml (add what the command can't set)"]
+    B --> C["kubectl apply -f task.yaml"]
+    C --> D["kubectl get / describe / logs: verify"]
+    D -- wrong --> B`}
+/>
+
+<Phase step="command-line" />
+
+## Set up your shell once
+
+At the start of the exam (the environment already has kubectl completion; check with `type _kubectl`):
+
+```bash
+alias k=kubectl
+export do="--dry-run=client -o yaml"     # k create deploy web --image=nginx $do > web.yaml
+export now="--force --grace-period=0"    # k delete pod x $now   (only for practice Pods!)
+```
+
+<Callout type="exam" title="Exam tip">
+Each task tells you which **context** to use, with a command like `kubectl config use-context k8s-c1`. Run it at the start of **every** task, even if you think you are already there. Working in the wrong cluster scores zero for that task.
+</Callout>
+
+## Generators you will use most
+
+<Terminal
+  command="k create deployment web --image=nginx:1.27 --replicas=3 --port=80 $do"
+  output={`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  creationTimestamp: null
+  labels:
+    app: web
+  name: web
+spec:
+  replicas: 3
+  ...`}
+/>
+
+| Object | Command |
+|---|---|
+| Pod | `k run web --image=nginx:1.27 --port=80 --labels=app=web,tier=fe $do` |
+| Pod with a command | `k run job-pod --image=busybox:1.36 --restart=Never $do -- sh -c 'echo hi; sleep 3600'` |
+| Deployment | `k create deployment web --image=nginx:1.27 --replicas=3 $do` |
+| Service | `k expose deployment web --port=80 --target-port=8080 $do` |
+| ConfigMap | `k create configmap app --from-literal=MODE=prod --from-file=app.conf $do` |
+| Secret | `k create secret generic db --from-literal=password=s3cr3t $do` |
+| Job | `k create job backup --image=busybox:1.36 $do -- sh -c 'date'` |
+| CronJob | `k create cronjob backup --image=busybox:1.36 --schedule='0 2 * * *' $do -- date` |
+| Role | `k create role reader --verb=get,list,watch --resource=pods $do` |
+| RoleBinding | `k create rolebinding read --role=reader --user=jane $do` |
+| ServiceAccount | `k create serviceaccount deployer $do` |
+| Namespace | `k create namespace team-a $do` |
+
+Note the `--` before a container command: everything after it becomes the container's `command`/`args`, not kubectl flags.
+
+## Find fields instead of remembering them
+
+`kubectl explain` reads the API schema of **your** cluster's version, so it is always right:
+
+<Terminal
+  command="k explain pod.spec.containers.resources"
+  output={`KIND:       Pod
+VERSION:    v1
+
+FIELD: resources <ResourceRequirements>
+
+DESCRIPTION:
+    Compute Resources required by this container. Cannot be updated. More info:
+    https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+    ...
+FIELDS:
+  claims	<[]ResourceClaim>
+  limits	<map[string]Quantity>
+  requests	<map[string]Quantity>`}
+/>
+
+<Terminal
+  command="k explain deployment.spec.strategy --recursive"
+  output={`GROUP:      apps
+KIND:       Deployment
+VERSION:    v1
+
+FIELD: strategy <DeploymentStrategy>
+...
+FIELDS:
+  rollingUpdate	<RollingUpdateDeployment>
+    maxSurge	<IntOrString>
+    maxUnavailable	<IntOrString>
+  type	<string>`}
+/>
+
+`--recursive` prints the whole subtree — ideal for "what was that field called again?". For anything not in the schema (concepts, examples), the exam allows the official documentation at kubernetes.io.
+
+## Inspecting things quickly
+
+| Need | Command |
+|---|---|
+| Everything in a namespace | `k get all -n app` (not *really* everything: no ConfigMaps, Secrets, PVCs…) |
+| Wide output with node and IP | `k get pods -o wide` |
+| Labels | `k get pods --show-labels`, filter with `-l app=web,tier!=db` |
+| Across all namespaces | `k get pods -A` |
+| The full object | `k get deploy web -o yaml` |
+| Why something is unhappy | `k describe pod web-xyz` → read **Events** first |
+| Recent cluster events | `k get events -A --sort-by=.lastTimestamp` |
+| Watch changes live | `k get pods -w` |
+
+## Changing things
+
+| Change | Command |
+|---|---|
+| Image | `k set image deploy/web nginx=nginx:1.28` |
+| Replicas | `k scale deploy/web --replicas=5` |
+| Resources | `k set resources deploy/web --requests=cpu=100m,memory=128Mi --limits=memory=256Mi` |
+| Env var | `k set env deploy/web MODE=prod` |
+| Labels / annotations | `k label pod web-xyz tier=fe`, `k annotate deploy web owner=team-a` |
+| Anything else | `k edit deploy web`, or `k patch` for scripted changes |
+
+<Callout type="warning" title="kubectl edit and immutable fields">
+Many Pod fields cannot be changed on a running Pod. `kubectl edit pod` will save your edited copy to `/tmp/kubectl-edit-*.yaml` and refuse the change. The fix: `kubectl replace --force -f /tmp/kubectl-edit-XXXX.yaml`, which deletes and recreates the Pod.
+</Callout>
+
+<Phase step="example" />
+
+## Example: a full task in under two minutes
+
+> *Create a Deployment `api` in namespace `prod` with 2 replicas of `nginx:1.27`, requests of `100m` CPU and `64Mi` memory, a readiness probe on `/` port 80, and expose it as a ClusterIP Service `api` on port 8080.*
+
+```bash
+k config use-context <given-context>
+k create namespace prod
+k -n prod create deployment api --image=nginx:1.27 --replicas=2 $do > api.yaml
+```
+
+Edit `api.yaml` — only the container section needs additions:
+
+```yaml title="api.yaml (container section)"
+      containers:
+      - image: nginx:1.27
+        name: nginx
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+```
+
+```bash
+k apply -f api.yaml
+k -n prod expose deployment api --port=8080 --target-port=80
+k -n prod get deploy,svc,endpointslices        # verify: 2/2 ready, Service has 2 endpoints
+```
+
+The verification step is not optional. A task is scored on the cluster's state, not on your commands.
+
+<Phase step="guided" />
+
+## Guided exercise
+
+<Exercise kind="guided" title="Build muscle memory">
+
+Do each item using a generator plus at most one edit, and time yourself. Target: under 90 seconds each.
+
+1. A Pod `probe` in namespace `tools`, image `busybox:1.36`, that runs `sleep 3600` and has label `role=debug`.
+2. A CronJob `report` that runs `date` every 15 minutes with image `busybox:1.36`, keeping 2 successful job histories (`successfulJobsHistoryLimit` — find it with `k explain`).
+3. A Role `pod-reader` in namespace `tools` allowing `get`, `list`, `watch` on Pods, bound to ServiceAccount `tools:inspector`.
+
+<Solution>
+
+```bash
+k create namespace tools
+k -n tools run probe --image=busybox:1.36 --labels=role=debug --restart=Never -- sleep 3600
+
+k create cronjob report --image=busybox:1.36 --schedule='*/15 * * * *' $do -- date > report.yaml
+k explain cronjob.spec.successfulJobsHistoryLimit
+# add under spec:   successfulJobsHistoryLimit: 2
+k apply -f report.yaml
+
+k -n tools create serviceaccount inspector
+k -n tools create role pod-reader --verb=get,list,watch --resource=pods
+k -n tools create rolebinding pod-reader --role=pod-reader --serviceaccount=tools:inspector
+k -n tools auth can-i list pods --as=system:serviceaccount:tools:inspector     # yes
+```
+
+</Solution>
+</Exercise>
+
+<Phase step="challenge" />
+
+## Independent challenge
+
+<Exercise kind="challenge" title="Generate what has no generator">
+
+There is no `kubectl create` generator for a PersistentVolumeClaim or a NetworkPolicy. Describe the fastest **reliable** way to produce a correct manifest for each during the exam, and use it to create a PVC `data` requesting `1Gi` with access mode `ReadWriteOnce`.
+
+<Solution>
+
+Copy a minimal example from the official documentation (allowed in the exam), paste it into a file, and adjust names and values. Then validate before applying:
+
+```bash
+vim pvc.yaml
+k apply -f pvc.yaml --dry-run=server     # schema and admission check without creating anything
+k apply -f pvc.yaml
+```
+
+```yaml title="pvc.yaml"
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+```
+
+</Solution>
+</Exercise>
+
+<Phase step="troubleshooting" />
+
+## Troubleshooting your own YAML
+
+<Exercise kind="troubleshooting" title="Why won't this apply?">
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+      - name: web
+        image: nginx:1.27
+```
+
+`kubectl apply` fails. Predict the error before running it.
+
+<Solution>
+
+```text
+The Deployment "web" is invalid: spec.template.metadata.labels: Invalid value:
+map[string]string{"app":"frontend"}: `selector` does not match template `labels`
+```
+
+A Deployment's `selector` must match its own Pod template labels, otherwise the ReplicaSet could never find the Pods it creates. Generators always get this right — one more reason to generate instead of typing.
+
+</Solution>
+</Exercise>
+
+<Callout type="mistakes">
+
+- Forgetting `-n <namespace>` and creating objects in `default`.
+- Typing YAML from memory, introducing indentation errors that cost minutes.
+- Using `--dry-run` without `-o yaml` (it then prints only `deployment.apps/web created (dry run)`).
+- Not verifying with `get`/`describe` after applying.
+
+</Callout>
+
+<Phase step="check" />
+
+## Knowledge check
+
+<KnowledgeCheck
+  question="You need to check that a manifest would be accepted by the cluster's admission webhooks, without creating anything. Which flag?"
+  options={['--dry-run=client', '--dry-run=server', '--validate=false', '-o yaml']}
+  answer={1}
+  explanation="Server-side dry run sends the request through authentication, authorization, admission and validation, then discards it. Client-side dry run never contacts the cluster."
+/>
+
+<KnowledgeCheck
+  question="Which command reliably shows the fields available under a Pod's securityContext on the exam cluster's Kubernetes version?"
+  options={['kubectl get pod -o yaml', 'kubectl explain pod.spec.securityContext --recursive', 'kubectl describe pod', 'kubectl api-resources']}
+  answer={1}
+  explanation="kubectl explain reads the OpenAPI schema served by the cluster itself, so it matches its version exactly."
+/>

@@ -1,0 +1,210 @@
+# Module quiz: Services and Endpoints. Graded by ms-learning; the browser
+# never receives `correct` or explanations before submitting.
+id: services-networking-quiz
+title: Services and Endpoints
+module: services
+description: Ten questions on selectors, ports, Service types, EndpointSlices and troubleshooting.
+passPercent: 70
+questions:
+  - id: q1
+    type: single
+    prompt: A Deployment's Pods are labelled `app=web,tier=frontend`. Which Service selector routes to them?
+    options:
+      - id: a
+        text: "`app: web, tier: frontend, version: v2`"
+        explanation: A Pod must match **every** key of the selector. The Pods have no `version` label, so nothing matches.
+      - id: b
+        text: "`app: web`"
+        correct: true
+        explanation: A selector with a subset of the Pod's labels matches — extra labels on the Pod do not matter.
+      - id: c
+        text: "`app: Web`"
+        explanation: Label values are case-sensitive; `Web` does not match `web`.
+      - id: d
+        text: "`deployment: web`"
+        explanation: Services select Pods by Pod labels; they know nothing about the Deployment that created them.
+    explanation: Selectors are AND-ed equality matches on Pod labels. Subsets match; extra or mismatched keys do not.
+
+  - id: q2
+    type: scenario
+    prompt: |
+      A Service has `port: 80` and `targetPort: 8080`. The container in each Pod runs a web server listening on port **80**.
+      `kubectl describe svc` shows three endpoints. What does a client Pod get when calling the Service on port 80?
+    options:
+      - id: a
+        text: The web page, because Kubernetes forwards to the port the container declares in `containerPort`
+        explanation: "`containerPort` is informational; routing uses the Service's `targetPort` only."
+      - id: b
+        text: Connection refused, because traffic is DNATed to `PodIP:8080` where nothing listens
+        correct: true
+        explanation: Endpoints only prove the Pods are selected and Ready, not that anything listens on `targetPort`.
+      - id: c
+        text: A DNS error
+        explanation: The name resolves to the ClusterIP; the failure happens later, at the Pod.
+      - id: d
+        text: The API server rejects the Service because ports differ
+        explanation: "`port` and `targetPort` are allowed — and very often — different."
+    explanation: Endpoints present plus connection refused is the signature of a `targetPort` that does not match the listening port.
+
+  - id: q3
+    type: multiple
+    prompt: Which of these make a Pod **disappear from a Service's ready endpoints**? Select all that apply.
+    options:
+      - id: a
+        text: Its readiness probe fails
+        correct: true
+        explanation: 'The kubelet marks the Pod not Ready; the EndpointSlice controller sets `ready: false`.'
+      - id: b
+        text: Its liveness probe fails once
+        explanation: A single liveness failure does nothing; after `failureThreshold` the container is restarted. Readiness, not liveness, controls endpoints.
+      - id: c
+        text: Someone removes the label the Service selects on
+        correct: true
+        explanation: The Pod no longer matches the selector and is dropped from the slices.
+      - id: d
+        text: The Pod is being deleted (terminating)
+        correct: true
+        explanation: 'Terminating endpoints have `ready: false` (they may stay `serving` while draining).'
+      - id: e
+        text: The node it runs on is cordoned
+        explanation: Cordoning only stops new scheduling; running Pods keep serving.
+    explanation: Membership is "matches the selector AND is Ready AND is not terminating". Cordon and liveness do not change it directly.
+
+  - id: q4
+    type: single
+    prompt: In a three-node cluster, a `NodePort` Service (default traffic policy) has one Pod, running on `node-2`. You call the node port on `node-3`. What happens?
+    options:
+      - id: a
+        text: Connection refused — `node-3` has no Pod
+        explanation: 'That is the behaviour of `externalTrafficPolicy: Local`, not the default.'
+      - id: b
+        text: kube-proxy on `node-3` forwards the request to the Pod on `node-2`
+        correct: true
+        explanation: 'With `externalTrafficPolicy: Cluster` every node accepts and forwards (with SNAT).'
+      - id: c
+        text: The request is redirected with an HTTP 307 to `node-2`
+        explanation: kube-proxy works at layer 4 and never issues HTTP redirects.
+      - id: d
+        text: Only control plane nodes open node ports
+        explanation: Every node opens the node port.
+    explanation: Default (`Cluster`) policy means any node can accept NodePort traffic for any Pod, at the cost of SNAT.
+
+  - id: q5
+    type: scenario
+    prompt: |
+      On a bare-metal cluster without any add-ons, you create `type: LoadBalancer`. After 30 minutes
+      `kubectl get svc` still shows `EXTERNAL-IP <pending>`. What is the most accurate explanation?
+    options:
+      - id: a
+        text: The kube-proxy DaemonSet is crashing
+        explanation: kube-proxy does not provision load balancers; it programs node rules.
+      - id: b
+        text: No controller implements LoadBalancer Services in this cluster (no cloud controller manager, no MetalLB)
+        correct: true
+        explanation: Kubernetes core only records the request; an external controller must fulfil it.
+      - id: c
+        text: 'LoadBalancer requires `externalTrafficPolicy: Local`'
+        explanation: Either traffic policy works with LoadBalancer.
+      - id: d
+        text: The selector matches no Pods
+        explanation: Missing endpoints do not prevent an external IP from being assigned.
+    explanation: "`<pending>` means nobody is fulfilling the request. The Service still works as a NodePort in the meantime."
+
+  - id: q6
+    type: single
+    prompt: 'What does a **headless** Service (`clusterIP: None`) change?'
+    options:
+      - id: a
+        text: It hides the Service from DNS
+        explanation: The opposite — DNS is the only way to use it.
+      - id: b
+        text: DNS returns the Ready Pod IPs instead of a single virtual IP, and kube-proxy does not load-balance it
+        correct: true
+        explanation: Clients connect to Pods directly; StatefulSets use this for stable per-Pod names.
+      - id: c
+        text: It can only be reached from the same namespace
+        explanation: Headless Services resolve from any namespace with the usual qualified names.
+      - id: d
+        text: It exposes the Pods on every node like a NodePort
+        explanation: Headless Services have no node ports.
+    explanation: "Headless = no virtual IP. DNS hands out endpoint addresses directly."
+
+  - id: q7
+    type: single
+    prompt: Which object does kube-proxy read to learn a Service's backend Pod IPs on a current cluster?
+    options:
+      - id: a
+        text: EndpointSlice (`discovery.k8s.io/v1`)
+        correct: true
+        explanation: kube-proxy watches EndpointSlices; the v1 Endpoints API is deprecated since v1.33.
+      - id: b
+        text: The Pods directly, by evaluating the selector itself
+        explanation: kube-proxy never evaluates selectors; the EndpointSlice controller does.
+      - id: c
+        text: The Deployment's status
+        explanation: Services and kube-proxy are unaware of Deployments.
+      - id: d
+        text: CoreDNS records
+        explanation: DNS maps names to the ClusterIP; it does not tell kube-proxy about backends.
+    explanation: Selector evaluation happens once, centrally, in the EndpointSlice controller; every kube-proxy consumes the result.
+
+  - id: q8
+    type: scenario
+    prompt: |
+      Client Pods in namespace `shop` call `http://payments` and get `wget: bad address 'payments'`.
+      The Service `payments` exists in namespace `billing` and has ready endpoints. What is the fix?
+    options:
+      - id: a
+        text: Call `http://payments.billing` (or the FQDN `payments.billing.svc.cluster.local`)
+        correct: true
+        explanation: A bare name is searched in the client's own namespace first; cross-namespace calls need at least `<service>.<namespace>`.
+      - id: b
+        text: Restart CoreDNS
+        explanation: DNS is working — it correctly reports there is no `payments` in `shop`.
+      - id: c
+        text: Change the Service to NodePort
+        explanation: The type does not affect DNS names.
+      - id: d
+        text: Add a NetworkPolicy allowing `shop` to reach `billing`
+        explanation: A policy problem would show as a timeout, not a name-resolution error.
+    explanation: "`bad address` is a DNS failure; cross-namespace Services need the namespace in the name."
+
+  - id: q9
+    type: multiple
+    prompt: "`kubectl port-forward svc/web 8080:80` works, but other Pods cannot reach `web`. Which remain plausible causes? Select all that apply."
+    options:
+      - id: a
+        text: A NetworkPolicy blocks traffic from the client Pods
+        correct: true
+        explanation: port-forward goes through the API server and kubelet, bypassing NetworkPolicies.
+      - id: b
+        text: kube-proxy is not running on the clients' nodes
+        correct: true
+        explanation: port-forward does not use kube-proxy at all.
+      - id: c
+        text: The web container is not listening on its port
+        explanation: port-forward reached a web Pod successfully, so it is listening.
+      - id: d
+        text: The clients use the wrong name or namespace
+        correct: true
+        explanation: port-forward used the Service object directly; the clients' DNS name is untested.
+    explanation: port-forward proves one Pod answers. It says nothing about DNS, kube-proxy or policies.
+
+  - id: q10
+    type: single
+    prompt: You want an existing external PostgreSQL server at `192.168.10.25` to be reachable in-cluster as `legacy-db:5432`. Which approach works?
+    options:
+      - id: a
+        text: 'An `ExternalName` Service with `externalName: 192.168.10.25`'
+        explanation: ExternalName creates a DNS CNAME and must be a hostname, not an IP.
+      - id: b
+        text: A Service without a selector plus a manually created EndpointSlice labelled `kubernetes.io/service-name=legacy-db`
+        correct: true
+        explanation: You supply the endpoint yourself; the Service gets a normal ClusterIP and port mapping.
+      - id: c
+        text: 'A Service with selector `ip: 192.168.10.25`'
+        explanation: Selectors match Pod labels, not addresses.
+      - id: d
+        text: It is impossible to reference IPs outside the Pod network
+        explanation: Manual endpoints are exactly for this.
+    explanation: Selector-less Services with manual EndpointSlices are the standard way to give external IPs a Service.

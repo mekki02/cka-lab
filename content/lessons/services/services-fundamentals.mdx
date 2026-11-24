@@ -1,0 +1,430 @@
+---
+id: services-fundamentals
+---
+
+Pods are disposable. A Deployment replaces them during rollouts, the scheduler moves them when a node is drained, and every replacement gets a **new IP address**. Anything that talks to Pods by IP is broken by design. A **Service** solves this: it gives a set of Pods one stable virtual IP and one stable DNS name, and keeps the list of backends current as Pods come and go.
+
+This lesson builds that idea from the ground up, then has you expose an application, prove the load balancing works, and break it on purpose.
+
+<Callout type="note" title="Lab environment">
+Commands assume the course kind cluster (`kind-cka`: one control plane, two workers). Create it with `kind create cluster --name cka --config deploy/kind/cka-cluster.yaml` from the platform repository, or use any practice cluster — never a production one.
+</Callout>
+
+<Phase step="theory" />
+
+## Why Services exist
+
+Watch what happens to Pod IPs during a routine rollout:
+
+<Terminal
+  command={`kubectl create deployment hostnames --image=registry.k8s.io/serve_hostname --replicas=3
+kubectl get pods -l app=hostnames -o wide`}
+  output={`NAME                         READY   STATUS    RESTARTS   AGE   IP           NODE          NOMINATED NODE   READINESS GATES
+hostnames-7d8f9b6c4d-2xkqp   1/1     Running   0          12s   10.244.1.5   cka-worker    <none>           <none>
+hostnames-7d8f9b6c4d-9hzt7   1/1     Running   0          12s   10.244.2.4   cka-worker2   <none>           <none>
+hostnames-7d8f9b6c4d-vbn6l   1/1     Running   0          12s   10.244.1.6   cka-worker    <none>           <none>`}
+/>
+
+<Terminal
+  command={`kubectl rollout restart deployment hostnames
+kubectl get pods -l app=hostnames -o wide`}
+  output={`NAME                        READY   STATUS    RESTARTS   AGE   IP           NODE          NOMINATED NODE   READINESS GATES
+hostnames-5c9b8d7f6-4lq8m   1/1     Running   0          6s    10.244.2.7   cka-worker2   <none>           <none>
+hostnames-5c9b8d7f6-m2zdc   1/1     Running   0          8s    10.244.1.8   cka-worker    <none>           <none>
+hostnames-5c9b8d7f6-w7rxf   1/1     Running   0          4s    10.244.2.8   cka-worker2   <none>           <none>`}
+/>
+
+Every IP changed. A client that had `10.244.1.5` configured is now talking to nothing (or, worse, to an unrelated Pod that inherited the address). Three problems follow:
+
+1. **Discovery** — how does a client find the current backends?
+2. **Load balancing** — how is traffic spread across several replicas?
+3. **Health** — how do clients avoid replicas that are starting up or shutting down?
+
+A Service answers all three without the client knowing anything about Pods.
+
+## What a Service actually is
+
+A Service is an API object with two important parts:
+
+- a **selector**: a label query, e.g. `app: hostnames`. Every Pod whose labels match is a candidate backend;
+- one or more **ports**: the port clients use (`port`) and the port the container listens on (`targetPort`).
+
+Creating it triggers three independent pieces of machinery:
+
+| Component | What it does | Where it runs |
+|---|---|---|
+| Service IP allocator (API server) | Assigns a **ClusterIP** from the service CIDR (`10.96.0.0/16` on kind) | control plane |
+| EndpointSlice controller | Watches Pods matching the selector and writes their IPs — **only the Ready ones** — into EndpointSlice objects | `kube-controller-manager` |
+| kube-proxy | Watches Services and EndpointSlices and programs packet rewriting on **every node**: traffic to `ClusterIP:port` is rewritten to one backend `PodIP:targetPort` | DaemonSet on each node |
+| CoreDNS | Serves `hostnames.default.svc.cluster.local` → ClusterIP | Deployment in `kube-system` |
+
+<Callout type="tip" title="The key mental model">
+The ClusterIP is **virtual**: no interface on any machine owns it, and nothing listens on it. It exists only as rewrite rules that kube-proxy installs on each node. That is why you can `curl` a Service IP but `ping` usually gets no answer — ICMP is not rewritten.
+</Callout>
+
+<Phase step="visualization" />
+
+## The path of one request
+
+<Diagram
+  caption="A client Pod calls the Service by name. DNS returns the ClusterIP; kube-proxy's rules on the client's own node pick a Ready backend and rewrite the destination."
+  chart={`flowchart TB
+    C[client Pod] -- "1 · resolve hostnames" --> D[CoreDNS]
+    D -- "2 · 10.96.142.31" --> C
+    C -- "3 · connect 10.96.142.31:80" --> K{{"kube-proxy rules on the client's node"}}
+    CTRL[EndpointSlice controller] -- writes Ready Pod IPs --> ES[(EndpointSlice)]
+    ES -. watched by .-> K
+    K -- "4 · DNAT to a Ready endpoint :9376" --> P1[Pod 10.244.1.8]
+    K -.-> P2[Pod 10.244.2.7]
+    K -.-> P3[Pod 10.244.2.8]`}
+/>
+
+Notice that the load-balancing decision happens on the **client's** node, per connection. There is no central load balancer Pod that could become a bottleneck or a single point of failure.
+
+<Phase step="command-line" />
+
+## Creating a Service
+
+The fastest way during the exam is `kubectl expose`. It copies the selector from the object you expose:
+
+<Terminal
+  command="kubectl expose deployment hostnames --port=80 --target-port=9376"
+  output="service/hostnames exposed"
+/>
+
+| Flag | Meaning |
+|---|---|
+| `--port=80` | Port clients connect to on the Service (`spec.ports[].port`) |
+| `--target-port=9376` | Port the container listens on (`spec.ports[].targetPort`). Defaults to `--port` if omitted — a classic source of bugs |
+| `--type` | `ClusterIP` (default), `NodePort` or `LoadBalancer` |
+| `--name` | Service name; defaults to the exposed object's name |
+| `--protocol` | `TCP` (default), `UDP` or `SCTP` |
+
+To get YAML you can edit instead of creating immediately, add `--dry-run=client -o yaml`:
+
+<Terminal command="kubectl expose deployment hostnames --port=80 --target-port=9376 --dry-run=client -o yaml">
+```text
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: hostnames
+  name: hostnames
+spec:
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 9376
+  selector:
+    app: hostnames
+status:
+  loadBalancer: {}
+```
+</Terminal>
+
+`kubectl create service clusterip` also exists, but it builds the selector from the **name** (`app: <name>`) rather than from a workload, so it is only correct when your Pods happen to carry that label.
+
+## Inspecting a Service
+
+<Terminal
+  command="kubectl get service hostnames"
+  output={`NAME        TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE
+hostnames   ClusterIP   10.96.142.31   <none>        80/TCP    20s`}
+/>
+
+<Terminal
+  command="kubectl describe service hostnames"
+  output={`Name:                     hostnames
+Namespace:                default
+Labels:                   app=hostnames
+Selector:                 app=hostnames
+Type:                     ClusterIP
+IP Family Policy:         SingleStack
+IP Families:              IPv4
+IP:                       10.96.142.31
+IPs:                      10.96.142.31
+Port:                     <unset>  80/TCP
+TargetPort:               9376/TCP
+Endpoints:                10.244.1.8:9376,10.244.2.7:9376,10.244.2.8:9376
+Session Affinity:         None
+Internal Traffic Policy:  Cluster
+Events:                   <none>`}
+/>
+
+The **Endpoints** line is the most useful line in that output. It is the list of backends traffic will actually reach. If it is empty, the Service cannot work, whatever else looks right.
+
+The backends themselves live in EndpointSlice objects, labelled with the Service name:
+
+<Terminal
+  command="kubectl get endpointslices -l kubernetes.io/service-name=hostnames"
+  output={`NAME              ADDRESSTYPE   PORTS   ENDPOINTS                          AGE
+hostnames-x7k2p   IPv4          9376    10.244.1.8,10.244.2.7,10.244.2.8   25s`}
+/>
+
+<Callout type="note" title="Endpoints vs EndpointSlices">
+The older `v1` **Endpoints** API is deprecated since Kubernetes v1.33; `kubectl get endpoints` still works but prints a deprecation warning. Use EndpointSlices — they are what kube-proxy reads. The next lesson but one covers them in depth.
+</Callout>
+
+<Phase step="example" />
+
+## A complete, declarative example
+
+In real clusters, and often in exam tasks, you write the Service as YAML. Use a **named port** so the Service does not hard-code the container's number:
+
+```yaml title="hostnames.yaml"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hostnames
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: hostnames
+  template:
+    metadata:
+      labels:
+        app: hostnames        # what the Service selects on
+    spec:
+      containers:
+        - name: serve
+          image: registry.k8s.io/serve_hostname
+          ports:
+            - name: http      # named port
+              containerPort: 9376
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hostnames
+spec:
+  type: ClusterIP             # the default; written out for clarity
+  selector:
+    app: hostnames            # must match the Pod template labels, not the Deployment's
+  ports:
+    - name: http
+      port: 80                # clients connect here
+      targetPort: http        # resolved per Pod to its "http" containerPort
+```
+
+Named target ports pay off during migrations: if a new image version listens on `8080`, you change the Pod template and the Service keeps working, even while old and new Pods coexist.
+
+## Calling the Service from inside the cluster
+
+ClusterIP Services are only reachable from inside the cluster. Start a throw-away client Pod:
+
+<Terminal
+  command={`kubectl run client --rm -it --restart=Never --image=busybox:1.36 -- \\
+  sh -c 'for i in 1 2 3 4 5 6; do wget -qO- hostnames; done'`}
+  output={`hostnames-5c9b8d7f6-w7rxf
+hostnames-5c9b8d7f6-4lq8m
+hostnames-5c9b8d7f6-w7rxf
+hostnames-5c9b8d7f6-m2zdc
+hostnames-5c9b8d7f6-4lq8m
+hostnames-5c9b8d7f6-m2zdc
+pod "client" deleted from default namespace`}
+/>
+
+`serve_hostname` replies with the name of the Pod that answered, so the output proves two things: the name `hostnames` resolved (CoreDNS), and requests were spread over all three replicas (kube-proxy). The distribution is random per connection, not round-robin.
+
+| Flag | Why |
+|---|---|
+| `--rm` | Delete the Pod when the command exits |
+| `-it` | Attach your terminal so you see the output |
+| `--restart=Never` | Create a bare Pod instead of retrying the command |
+| `-- sh -c '...'` | Everything after `--` is the container command |
+
+From another namespace you need a longer name: `hostnames.default` or the fully qualified `hostnames.default.svc.cluster.local`. The CoreDNS module explains the search domains that make the short name work.
+
+<Phase step="guided" />
+
+## Guided exercise
+
+<Exercise kind="guided" title="Expose a web application and prove load balancing">
+
+1. Create a namespace and a Deployment of three `nginx:1.27` replicas, labelled `app: web`:
+
+   ```bash
+   kubectl create namespace svc-lab
+   kubectl -n svc-lab create deployment web --image=nginx:1.27 --replicas=3
+   ```
+
+2. Expose it on port `8080`, forwarding to nginx's port `80`:
+
+   ```bash
+   kubectl -n svc-lab expose deployment web --port=8080 --target-port=80
+   ```
+
+3. Confirm the Service has three endpoints:
+
+   ```bash
+   kubectl -n svc-lab get endpointslices -l kubernetes.io/service-name=web
+   ```
+
+4. From a client Pod in the **default** namespace, fetch the page using the cross-namespace name:
+
+   ```bash
+   kubectl run client --rm -it --restart=Never --image=busybox:1.36 -- wget -qO- web.svc-lab:8080
+   ```
+
+   You should see the HTML of nginx's welcome page.
+
+5. Scale the Deployment to 5 replicas and run step 3 again. The EndpointSlice updates on its own — you did not touch the Service.
+
+</Exercise>
+
+<Phase step="challenge" />
+
+## Independent challenge
+
+<Exercise kind="challenge" title="A Service for only some Pods">
+
+In namespace `svc-lab`, the Deployment `web` should get a second Service called `web-canary` that only routes to Pods carrying the label `track=canary`.
+
+- Label exactly **one** existing `web` Pod with `track=canary` (do not change the Deployment).
+- Create `web-canary` (port 80 → target port 80) so that it has exactly one endpoint.
+- Explain what happens to `web-canary`'s endpoints if that Pod is deleted, and why.
+
+<Hint>
+A Service's selector can contain several labels; a Pod must match **all** of them. `kubectl label pod <name> track=canary` adds a label to a running Pod.
+</Hint>
+
+<Solution>
+
+```bash
+POD=$(kubectl -n svc-lab get pods -l app=web -o jsonpath='{.items[0].metadata.name}')
+kubectl -n svc-lab label pod "$POD" track=canary
+
+kubectl -n svc-lab create service clusterip web-canary --tcp=80:80 --dry-run=client -o yaml > web-canary.yaml
+# edit selector to:  app: web  /  track: canary
+kubectl apply -f web-canary.yaml
+kubectl -n svc-lab get endpointslices -l kubernetes.io/service-name=web-canary
+```
+
+The selector in `web-canary.yaml` must be:
+
+```yaml
+selector:
+  app: web
+  track: canary
+```
+
+If the labelled Pod is deleted, the ReplicaSet creates a replacement from the Pod **template** — which has no `track` label. `web-canary` ends up with **zero endpoints**. Labels added by hand to Pods are not durable; durable canaries use a separate Deployment with its own template labels.
+
+</Solution>
+</Exercise>
+
+<Phase step="troubleshooting" />
+
+## Troubleshooting: the Service that answers nothing
+
+<Exercise kind="troubleshooting" title="Connection refused">
+
+Apply this manifest and test it:
+
+```yaml title="broken.yaml"
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-broken
+  namespace: svc-lab
+spec:
+  selector:
+    app: Web
+  ports:
+    - port: 80
+      targetPort: 80
+```
+
+```bash
+kubectl apply -f broken.yaml
+kubectl run client --rm -it --restart=Never --image=busybox:1.36 -- wget -qO- -T 3 web-broken.svc-lab
+```
+
+The client times out. Diagnose why **before** opening the solution: which single command shows the problem most directly?
+
+<Hint>
+A Service is only as good as its endpoints. What does `kubectl -n svc-lab describe svc web-broken` show on the `Endpoints:` line?
+</Hint>
+
+</Exercise>
+
+<Phase step="solution" />
+
+## Solution, step by step
+
+**1. Check endpoints first.** `kubectl -n svc-lab describe svc web-broken` shows `Endpoints:` with no addresses. The Service exists and has a ClusterIP, but routes to nothing.
+
+**2. Compare the selector with the real labels.**
+
+<Terminal
+  command="kubectl -n svc-lab get pods --show-labels"
+  output={`NAME                   READY   STATUS    RESTARTS   AGE   LABELS
+web-6d4b9c6f7b-8m2kq   1/1     Running   0          10m   app=web,pod-template-hash=6d4b9c6f7b
+...`}
+/>
+
+The selector says `app: Web`; the Pods are labelled `app=web`. Label values are **case-sensitive**.
+
+**3. Fix the selector** — the Pods are right, the Service is wrong:
+
+```bash
+kubectl -n svc-lab patch service web-broken -p '{"spec":{"selector":{"app":"web"}}}'
+```
+
+**4. Verify.** Endpoints appear immediately and the client gets the nginx page.
+
+The general rule: **empty endpoints → selector or readiness problem; endpoints present but connection refused → port problem.** The troubleshooting lesson at the end of this module turns that into a full checklist.
+
+<Callout type="mistakes">
+
+- Selecting on the **Deployment's** labels instead of the **Pod template's** labels. They are often identical, which hides the mistake until they are not.
+- Forgetting `--target-port`, so the Service forwards to the wrong container port.
+- Testing a ClusterIP from your laptop. It only exists inside the cluster — test from a Pod.
+- Expecting `ping` to work against a ClusterIP.
+
+</Callout>
+
+<Phase step="check" />
+
+## Knowledge check
+
+<KnowledgeCheck
+  question="You scale a Deployment from 3 to 6 replicas. What must you do so its existing Service sends traffic to the new Pods?"
+  options={[
+    'Delete and recreate the Service',
+    'Nothing — the EndpointSlice controller adds Ready Pods that match the selector',
+    'Restart kube-proxy on every node',
+    'Run kubectl rollout restart on the Service',
+  ]}
+  answer={1}
+  explanation="Services select Pods by label. The EndpointSlice controller watches Pods continuously and adds every matching Pod once it is Ready; kube-proxy picks up the change by itself."
+/>
+
+<KnowledgeCheck
+  question="A Service has port: 80 and targetPort: 8080. A Pod behind it listens on 80. What does a client calling the Service on port 80 get?"
+  options={[
+    'A response — Kubernetes detects the right port',
+    'Connection refused or a timeout — traffic is sent to the Pod on 8080, where nothing listens',
+    'An HTTP 404 from kube-proxy',
+    'The Service is rejected by the API server',
+  ]}
+  answer={1}
+  explanation="kube-proxy rewrites the destination to PodIP:targetPort without checking anything is listening. Endpoints look healthy, but connections fail at the Pod."
+/>
+
+<KnowledgeCheck
+  question="Which component makes a ClusterIP reachable from a Pod on any node?"
+  options={['CoreDNS', 'The Service controller in the API server', 'kube-proxy, which programs rewrite rules on every node', 'The CNI plugin, by assigning the ClusterIP to a bridge interface']}
+  answer={2}
+  explanation="CoreDNS only maps names to the ClusterIP. kube-proxy (or a CNI that replaces it, such as Cilium) turns traffic to the virtual IP into traffic to a real Pod IP on each node."
+/>
+
+## Clean up
+
+```bash
+kubectl delete deployment hostnames && kubectl delete service hostnames
+# keep namespace svc-lab: the next lessons reuse it
+```
+
+Next: exposing Services **outside** the cluster with NodePort and LoadBalancer — and when to skip the virtual IP entirely.

@@ -1,0 +1,404 @@
+id: cka-mock-1
+title: "CKA Mock Exam 1"
+description: |
+  Twelve performance-based tasks across all five domains, weighted roughly like the real exam
+  (troubleshooting heaviest). Designed to run on the course kind cluster. Aim to finish in the time limit
+  and **verify every task** before moving on — partial credit is awarded per check.
+durationMinutes: 120
+passPercent: 66
+environment: |
+  All tasks use the course kind cluster (`kind-cka`, one control plane and two workers). Tasks that need a
+  node shell use `docker exec -it <node> bash` — on the real exam you would `ssh` to the node instead.
+  Create a fresh cluster before starting so earlier labs do not interfere:
+  `kind delete cluster --name cka; kind create cluster --name cka --config deploy/kind/cka-cluster.yaml`.
+  Then run the preparation commands once: `kubectl create namespace exam-broken; kubectl -n exam-broken create deployment web --image=nginx:1.277; kubectl -n exam-broken run hungry --image=nginx:1.27 --overrides='{"spec":{"containers":[{"name":"hungry","image":"nginx:1.27","resources":{"requests":{"cpu":"64"}}}]}}'`
+tasks:
+  - id: t1-rollout
+    title: Rolling update and rollback
+    domain: workloads-scheduling
+    points: 8
+    context: kubectl config use-context kind-cka
+    description: |
+      In namespace `exam-apps` (create it), create a Deployment `shop` with **3** replicas of `nginx:1.26`.
+      Update it to `nginx:1.27` and wait for the rollout to finish. Then roll back to the previous revision.
+      The Deployment must end up running `nginx:1.26` with 3 ready replicas.
+    checks:
+      - id: image
+        description: Deployment image is nginx:1.26
+        command: kubectl -n exam-apps get deploy shop -o jsonpath='{.spec.template.spec.containers[0].image}'
+        expect: nginx:1.26
+      - id: ready
+        description: 3 replicas ready
+        command: kubectl -n exam-apps get deploy shop -o jsonpath='{.status.readyReplicas}'
+        expect: "3"
+      - id: revisions
+        description: At least 3 revisions in history (create, update, rollback)
+        command: kubectl -n exam-apps rollout history deploy shop | grep -c '^[0-9]'
+        expect: A number of 2 or more (rollback reuses the first template as a new revision)
+    solution: |
+      ```bash
+      kubectl create namespace exam-apps
+      kubectl -n exam-apps create deployment shop --image=nginx:1.26 --replicas=3
+      kubectl -n exam-apps set image deployment/shop nginx=nginx:1.27
+      kubectl -n exam-apps rollout status deployment/shop
+      kubectl -n exam-apps rollout undo deployment/shop
+      kubectl -n exam-apps rollout status deployment/shop
+      ```
+      The container created by `kubectl create deployment` is named after the image (`nginx`), which is why
+      `set image` uses `nginx=...`.
+
+  - id: t2-nodeport
+    title: Expose with a fixed NodePort
+    domain: services-networking
+    points: 6
+    context: kubectl config use-context kind-cka
+    description: |
+      Expose Deployment `shop` in `exam-apps` as Service `shop-np` of type **NodePort** on node port **30200**,
+      service port 80, targeting container port 80.
+    checks:
+      - id: type
+        description: Service type and node port
+        command: kubectl -n exam-apps get svc shop-np -o jsonpath='{.spec.type}/{.spec.ports[0].nodePort}'
+        expect: NodePort/30200
+      - id: endpoints
+        description: Service has 3 endpoints
+        command: kubectl -n exam-apps get endpointslices -l kubernetes.io/service-name=shop-np -o jsonpath='{.items[*].endpoints[*].addresses[0]}' | wc -w
+        expect: "3"
+    solution: |
+      ```bash
+      kubectl -n exam-apps expose deployment shop --name=shop-np --type=NodePort --port=80 --dry-run=client -o yaml > np.yaml
+      # add "nodePort: 30200" under the port, then:
+      kubectl apply -f np.yaml
+      ```
+
+  - id: t3-rbac
+    title: Least-privilege ServiceAccount
+    domain: cluster-architecture
+    points: 8
+    context: kubectl config use-context kind-cka
+    description: |
+      In namespace `exam-apps`, create ServiceAccount `deployer`. It must be allowed to `get`, `list`, `create`
+      and `update` **Deployments** in `exam-apps` only, and nothing else.
+    checks:
+      - id: can-create
+        description: deployer can create deployments in exam-apps
+        command: kubectl -n exam-apps auth can-i create deployments --as=system:serviceaccount:exam-apps:deployer
+        expect: "yes"
+      - id: cannot-delete
+        description: deployer cannot delete deployments
+        command: kubectl -n exam-apps auth can-i delete deployments --as=system:serviceaccount:exam-apps:deployer
+        expect: "no"
+      - id: other-ns
+        description: deployer cannot list deployments in default
+        command: kubectl -n default auth can-i list deployments --as=system:serviceaccount:exam-apps:deployer
+        expect: "no"
+    solution: |
+      ```bash
+      kubectl -n exam-apps create serviceaccount deployer
+      kubectl -n exam-apps create role deployer --verb=get,list,create,update --resource=deployments
+      kubectl -n exam-apps create rolebinding deployer --role=deployer --serviceaccount=exam-apps:deployer
+      ```
+      A Role (not ClusterRole) plus a RoleBinding keeps the permissions inside the namespace.
+
+  - id: t4-storage
+    title: PersistentVolume, claim and Pod
+    domain: storage
+    points: 8
+    context: kubectl config use-context kind-cka
+    description: |
+      Create a PersistentVolume `exam-pv` of **1Gi**, access mode `ReadWriteOnce`, reclaim policy `Retain`,
+      storage class `manual`, using `hostPath` `/mnt/exam-data`. Create a PVC `exam-pvc` in `exam-apps`
+      requesting 500Mi from class `manual` and make sure it binds to `exam-pv`. Finally run Pod `writer`
+      (image `busybox:1.36`, command `sh -c 'echo hello > /data/hello.txt && sleep 3600'`) mounting the claim at `/data`.
+    checks:
+      - id: bound
+        description: PVC is Bound to exam-pv
+        command: kubectl -n exam-apps get pvc exam-pvc -o jsonpath='{.status.phase}/{.spec.volumeName}'
+        expect: Bound/exam-pv
+      - id: retain
+        description: PV reclaim policy
+        command: kubectl get pv exam-pv -o jsonpath='{.spec.persistentVolumeReclaimPolicy}'
+        expect: Retain
+      - id: file
+        description: The Pod wrote to the volume
+        command: kubectl -n exam-apps exec writer -- cat /data/hello.txt
+        expect: hello
+    solution: |
+      ```yaml
+      apiVersion: v1
+      kind: PersistentVolume
+      metadata:
+        name: exam-pv
+      spec:
+        capacity: { storage: 1Gi }
+        accessModes: ["ReadWriteOnce"]
+        persistentVolumeReclaimPolicy: Retain
+        storageClassName: manual
+        hostPath: { path: /mnt/exam-data }
+      ---
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: exam-pvc
+        namespace: exam-apps
+      spec:
+        storageClassName: manual
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 500Mi } }
+      ---
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: writer
+        namespace: exam-apps
+      spec:
+        containers:
+          - name: writer
+            image: busybox:1.36
+            command: ["sh", "-c", "echo hello > /data/hello.txt && sleep 3600"]
+            volumeMounts: [{ name: data, mountPath: /data }]
+        volumes:
+          - name: data
+            persistentVolumeClaim: { claimName: exam-pvc }
+      ```
+      Setting `storageClassName: manual` on **both** objects matters: without it, the PVC would use the
+      cluster's default StorageClass (kind ships `standard`) and be dynamically provisioned instead.
+
+  - id: t5-scheduling
+    title: Taints, tolerations and node selection
+    domain: workloads-scheduling
+    points: 7
+    context: kubectl config use-context kind-cka
+    description: |
+      Taint node `cka-worker2` with `dedicated=gpu:NoSchedule` and label it `accelerator=gpu`.
+      Create Pod `trainer` in `exam-apps` (image `busybox:1.36`, command `sleep 3600`) that runs **only** on that node.
+    checks:
+      - id: taint
+        description: Node is tainted
+        command: kubectl get node cka-worker2 -o jsonpath='{.spec.taints[?(@.key=="dedicated")].effect}'
+        expect: NoSchedule
+      - id: placed
+        description: trainer runs on cka-worker2
+        command: kubectl -n exam-apps get pod trainer -o jsonpath='{.spec.nodeName}/{.status.phase}'
+        expect: cka-worker2/Running
+    solution: |
+      ```bash
+      kubectl taint node cka-worker2 dedicated=gpu:NoSchedule
+      kubectl label node cka-worker2 accelerator=gpu
+      ```
+      ```yaml
+      apiVersion: v1
+      kind: Pod
+      metadata: { name: trainer, namespace: exam-apps }
+      spec:
+        nodeSelector: { accelerator: gpu }
+        tolerations:
+          - { key: dedicated, operator: Equal, value: gpu, effect: NoSchedule }
+        containers:
+          - { name: trainer, image: busybox:1.36, command: ["sleep", "3600"] }
+      ```
+      The toleration *allows* the Pod onto the tainted node; the nodeSelector *forces* it there. You need both.
+
+  - id: t6-config
+    title: ConfigMap and Secret
+    domain: workloads-scheduling
+    points: 6
+    context: kubectl config use-context kind-cka
+    description: |
+      In `exam-apps`, create ConfigMap `app-config` with `MODE=production` and Secret `app-secret` with
+      `API_KEY=k8s-rocks`. Create Pod `configured` (image `busybox:1.36`, command `sleep 3600`) that receives
+      `MODE` as an environment variable from the ConfigMap and mounts the Secret as files under `/etc/secret`.
+    checks:
+      - id: env
+        description: MODE is set
+        command: kubectl -n exam-apps exec configured -- printenv MODE
+        expect: production
+      - id: file
+        description: Secret is mounted as a file
+        command: kubectl -n exam-apps exec configured -- cat /etc/secret/API_KEY
+        expect: k8s-rocks
+    solution: |
+      ```bash
+      kubectl -n exam-apps create configmap app-config --from-literal=MODE=production
+      kubectl -n exam-apps create secret generic app-secret --from-literal=API_KEY=k8s-rocks
+      ```
+      ```yaml
+      apiVersion: v1
+      kind: Pod
+      metadata: { name: configured, namespace: exam-apps }
+      spec:
+        containers:
+          - name: app
+            image: busybox:1.36
+            command: ["sleep", "3600"]
+            env:
+              - name: MODE
+                valueFrom: { configMapKeyRef: { name: app-config, key: MODE } }
+            volumeMounts: [{ name: secret, mountPath: /etc/secret, readOnly: true }]
+        volumes:
+          - name: secret
+            secret: { secretName: app-secret }
+      ```
+
+  - id: t7-netpol
+    title: Default deny with one exception
+    domain: services-networking
+    points: 7
+    context: kubectl config use-context kind-cka
+    description: |
+      In namespace `exam-apps`, create NetworkPolicy `default-deny-ingress` that denies all **ingress** to all
+      Pods, and NetworkPolicy `allow-frontend` that allows ingress to Pods labelled `app=shop` on TCP port 80
+      **only** from Pods labelled `role=frontend` in the same namespace.
+    checks:
+      - id: deny
+        description: Default deny selects every Pod and has no rules
+        command: kubectl -n exam-apps get netpol default-deny-ingress -o jsonpath='{.spec.podSelector}/{.spec.policyTypes}/{.spec.ingress}'
+        expect: '{}/["Ingress"]/'
+      - id: allow
+        description: allow-frontend source selector
+        command: kubectl -n exam-apps get netpol allow-frontend -o jsonpath='{.spec.ingress[0].from[0].podSelector.matchLabels.role}'
+        expect: frontend
+    solution: |
+      ```yaml
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata: { name: default-deny-ingress, namespace: exam-apps }
+      spec:
+        podSelector: {}
+        policyTypes: ["Ingress"]
+      ---
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata: { name: allow-frontend, namespace: exam-apps }
+      spec:
+        podSelector: { matchLabels: { app: shop } }
+        policyTypes: ["Ingress"]
+        ingress:
+          - from:
+              - podSelector: { matchLabels: { role: frontend } }
+            ports:
+              - { protocol: TCP, port: 80 }
+      ```
+
+  - id: t8-broken-image
+    title: Repair a failing Deployment
+    domain: troubleshooting
+    points: 8
+    context: kubectl config use-context kind-cka
+    description: |
+      Deployment `web` in namespace `exam-broken` has no available replicas. Find the cause and fix it so the
+      Deployment becomes fully available. Do not delete the Deployment.
+    checks:
+      - id: available
+        description: Deployment is available
+        command: kubectl -n exam-broken get deploy web -o jsonpath='{.status.availableReplicas}'
+        expect: "1"
+    solution: |
+      `kubectl -n exam-broken get pods` shows `ImagePullBackOff`; `describe pod` shows the image `nginx:1.277`
+      does not exist (a typo for `1.27`).
+
+      ```bash
+      kubectl -n exam-broken set image deployment/web nginx=nginx:1.27
+      kubectl -n exam-broken rollout status deployment/web
+      ```
+
+  - id: t9-pending
+    title: A Pod that never schedules
+    domain: troubleshooting
+    points: 8
+    context: kubectl config use-context kind-cka
+    description: |
+      Pod `hungry` in `exam-broken` is stuck in `Pending`. Find out why and get an equivalent Pod running
+      with a CPU request of `100m`. The Pod must keep the name `hungry`.
+    checks:
+      - id: running
+        description: hungry is Running
+        command: kubectl -n exam-broken get pod hungry -o jsonpath='{.status.phase}'
+        expect: Running
+      - id: request
+        description: CPU request is 100m
+        command: kubectl -n exam-broken get pod hungry -o jsonpath='{.spec.containers[0].resources.requests.cpu}'
+        expect: 100m
+    solution: |
+      `kubectl -n exam-broken describe pod hungry` shows
+      `0/3 nodes are available: 1 node(s) had untolerated taint(s), 2 Insufficient cpu` — it requests 64 CPUs
+      (the third node is the control plane, excluded by its taint). Resource requests of a running Pod
+      cannot be edited freely, so export, fix and replace it:
+
+      ```bash
+      kubectl -n exam-broken get pod hungry -o yaml > hungry.yaml
+      # change requests.cpu to 100m (and remove status, nodeName if present)
+      kubectl replace --force -f hungry.yaml
+      ```
+
+  - id: t10-etcd-backup
+    title: etcd snapshot
+    domain: cluster-architecture
+    points: 10
+    context: kubectl config use-context kind-cka
+    description: |
+      Take a snapshot of the cluster's etcd and save it on the control plane node at
+      `/var/lib/etcd/exam-backup.db`. Use the certificates under `/etc/kubernetes/pki/etcd/`.
+    checks:
+      - id: exists
+        description: Snapshot file exists and is non-empty
+        command: docker exec cka-control-plane sh -c 'test -s /var/lib/etcd/exam-backup.db && echo present'
+        expect: present
+    solution: |
+      Run `etcdctl` inside the etcd static Pod (it has the binary and sees `/var/lib/etcd` and the certificates):
+
+      ```bash
+      kubectl -n kube-system exec etcd-cka-control-plane -- etcdctl \
+        --endpoints=https://127.0.0.1:2379 \
+        --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+        --cert=/etc/kubernetes/pki/etcd/server.crt \
+        --key=/etc/kubernetes/pki/etcd/server.key \
+        snapshot save /var/lib/etcd/exam-backup.db
+      ```
+      On a real control plane node you would run the same `etcdctl` command directly over `ssh`.
+
+  - id: t11-hpa
+    title: Horizontal Pod Autoscaler
+    domain: workloads-scheduling
+    points: 6
+    context: kubectl config use-context kind-cka
+    description: |
+      Configure autoscaling for Deployment `shop` in `exam-apps`: between **2** and **6** replicas, targeting
+      **60%** average CPU utilisation. (The Deployment needs CPU requests for this to work; set `100m`.)
+    checks:
+      - id: hpa
+        description: HPA bounds and target
+        command: kubectl -n exam-apps get hpa shop -o jsonpath='{.spec.minReplicas}-{.spec.maxReplicas}-{.spec.metrics[0].resource.target.averageUtilization}'
+        expect: 2-6-60
+      - id: requests
+        description: CPU request set on the Deployment
+        command: kubectl -n exam-apps get deploy shop -o jsonpath='{.spec.template.spec.containers[0].resources.requests.cpu}'
+        expect: 100m
+    solution: |
+      ```bash
+      kubectl -n exam-apps set resources deployment shop --requests=cpu=100m
+      kubectl -n exam-apps autoscale deployment shop --min=2 --max=6 --cpu=60%
+      ```
+      Without metrics-server the HPA shows `<unknown>` targets, but the object is correct; the exam clusters
+      usually have metrics-server installed. (Older kubectl versions use `--cpu-percent=60` instead of `--cpu=60%`.)
+
+  - id: t12-jsonpath
+    title: Report from the cluster
+    domain: troubleshooting
+    points: 8
+    context: kubectl config use-context kind-cka
+    description: |
+      Write the names of all Pods in namespace `kube-system` that run on node `cka-control-plane`, one per line
+      and sorted alphabetically, to the file `/tmp/cp-pods.txt` on **your** machine.
+    checks:
+      - id: file
+        description: The file lists the control plane Pods
+        command: cat /tmp/cp-pods.txt
+        expect: coredns-…, etcd-cka-control-plane, kube-apiserver-cka-control-plane, … (one per line, sorted)
+    solution: |
+      ```bash
+      kubectl -n kube-system get pods --field-selector spec.nodeName=cka-control-plane \
+        -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | sort > /tmp/cp-pods.txt
+      ```
+      `--field-selector spec.nodeName=…` filters on the server; `-o custom-columns=NAME:.metadata.name --no-headers`
+      is an equally valid way to print one name per line.

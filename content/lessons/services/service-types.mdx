@@ -1,0 +1,291 @@
+---
+id: service-types
+---
+
+A ClusterIP Service is reachable only from inside the cluster. To accept traffic from outside — a browser, another data centre, a load balancer in front of the cluster — you need a different **Service type**. The types are not alternatives so much as **layers**: each one adds something on top of the previous.
+
+<Phase step="theory" />
+
+## The layers
+
+| Type | Adds | Reachable from | Typical use |
+|---|---|---|---|
+| `ClusterIP` | A virtual IP + DNS name | Inside the cluster | Service-to-service traffic (the default) |
+| `NodePort` | A ClusterIP **plus** the same port (30000–32767) opened on **every node** | Anything that can reach a node IP | Bare-metal, labs, behind an external load balancer you manage |
+| `LoadBalancer` | A NodePort **plus** an external load balancer provisioned by a controller | The load balancer's external IP | Cloud clusters; on-prem with MetalLB or similar |
+| `ExternalName` | Only a DNS `CNAME` to an external name — no IP, no proxying | Inside the cluster | Giving an external database a cluster-local name |
+
+Two more knobs change *how* a Service behaves rather than where it is reachable:
+
+- **Headless Services** (`clusterIP: None`): no virtual IP at all. DNS returns the **Pod IPs** directly. StatefulSets depend on this so each replica gets a stable DNS name (`db-0.db.default.svc.cluster.local`).
+- **Traffic policies**: `externalTrafficPolicy` and `internalTrafficPolicy` decide whether traffic may be forwarded to a backend on *another* node.
+
+<Callout type="note" title="Who implements LoadBalancer?">
+Kubernetes itself never creates a cloud load balancer. A **cloud controller manager** (on AWS, GCP, Azure…) or an add-on such as MetalLB watches for `type: LoadBalancer` Services and provisions one. Without such a controller the Service stays with `EXTERNAL-IP <pending>` forever — a frequent "bug" that is really a missing component.
+</Callout>
+
+<Phase step="visualization" />
+
+## How the layers stack
+
+<Diagram
+  caption="A LoadBalancer Service is a NodePort Service, which is a ClusterIP Service. Each layer forwards into the one below."
+  chart={`flowchart TB
+    U[client outside the cluster] --> LB[external load balancer<br/>203.0.113.10:80]
+    LB --> N1[node A :31080]
+    LB --> N2[node B :31080]
+    N1 --> VIP{{ClusterIP 10.96.40.12:80}}
+    N2 --> VIP
+    VIP --> P1[Pod :8080]
+    VIP --> P2[Pod :8080]`}
+/>
+
+## externalTrafficPolicy: Cluster vs Local
+
+With the default **`Cluster`** policy, any node accepts NodePort traffic and may forward it to a Pod on another node. The extra hop requires **SNAT**, so the Pod sees the node's IP, not the client's.
+
+With **`Local`**, a node only forwards to Pods running **on itself**. The client IP is preserved and there is no extra hop — but a node with no local Pod drops the traffic. Cloud load balancers handle that through a health check port (`healthCheckNodePort`) that only succeeds on nodes with local endpoints.
+
+| | `Cluster` (default) | `Local` |
+|---|---|---|
+| Client source IP visible to Pod | No (SNAT) | Yes |
+| Extra network hop possible | Yes | No |
+| Uneven load across Pods | Even | Can be uneven (per node, not per Pod) |
+| Node without a local Pod | Forwards | Drops |
+
+<Phase step="command-line" />
+
+## Creating NodePort and LoadBalancer Services
+
+<Terminal
+  command="kubectl -n svc-lab expose deployment web --name=web-np --type=NodePort --port=80 --target-port=80"
+  output="service/web-np exposed"
+/>
+
+<Terminal
+  command="kubectl -n svc-lab get service web-np"
+  output={`NAME     TYPE       CLUSTER-IP      EXTERNAL-IP   PORT(S)        AGE
+web-np   NodePort   10.96.211.47    <none>        80:31742/TCP   4s`}
+/>
+
+`80:31742/TCP` reads as **service port 80, node port 31742**. The node port was picked at random from the range. In YAML you can pin it, which exam tasks often require:
+
+```yaml title="web-np.yaml"
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-np
+  namespace: svc-lab
+spec:
+  type: NodePort
+  selector:
+    app: web
+  ports:
+    - port: 80          # ClusterIP port, still works inside the cluster
+      targetPort: 80    # container port
+      nodePort: 30080   # must be inside --service-node-port-range (default 30000-32767)
+```
+
+To reach a NodePort, you need a **node IP**:
+
+<Terminal
+  command="kubectl get nodes -o wide"
+  output={`NAME                STATUS   ROLES           AGE   VERSION   INTERNAL-IP   EXTERNAL-IP   OS-IMAGE                         KERNEL-VERSION     CONTAINER-RUNTIME
+cka-control-plane   Ready    control-plane   2d    v1.37.0   172.18.0.4    <none>        Debian GNU/Linux 12 (bookworm)   6.10.14-linuxkit   containerd://2.1.4
+cka-worker          Ready    <none>          2d    v1.37.0   172.18.0.2    <none>        Debian GNU/Linux 12 (bookworm)   6.10.14-linuxkit   containerd://2.1.4
+cka-worker2         Ready    <none>          2d    v1.37.0   172.18.0.3    <none>        Debian GNU/Linux 12 (bookworm)   6.10.14-linuxkit   containerd://2.1.4`}
+/>
+
+<Callout type="note" title="kind and your laptop">
+kind nodes are containers on a Docker network. On Linux the node IPs (`172.18.0.x`) are reachable from the host; with Docker Desktop on macOS or Windows they are not. Test from a Pod instead — it works everywhere and is what you would do in the exam:
+</Callout>
+
+<Terminal
+  command="kubectl run client --rm -i --restart=Never --image=busybox:1.36 -- wget -qO- -T 3 http://172.18.0.2:30080"
+  output={`<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+...
+pod "client" deleted from default namespace`}
+/>
+
+Note that **every** node answers on the node port, including the control plane node and nodes that run none of the Pods — kube-proxy forwards.
+
+A LoadBalancer Service is created the same way with `--type=LoadBalancer`. On a plain kind cluster you will see:
+
+<Terminal
+  command={`kubectl -n svc-lab expose deployment web --name=web-lb --type=LoadBalancer --port=80
+kubectl -n svc-lab get service web-lb`}
+  output={`NAME     TYPE           CLUSTER-IP     EXTERNAL-IP   PORT(S)        AGE
+web-lb   LoadBalancer   10.96.88.140   <pending>     80:30914/TCP   10s`}
+/>
+
+`<pending>` is expected: nothing in a bare kind cluster implements LoadBalancer. The `sigs.k8s.io/cloud-provider-kind` project, run on your host, provisions one for kind clusters; on-prem clusters typically use MetalLB. The node port (`30914`) works regardless, because a LoadBalancer Service is still a NodePort Service.
+
+## Headless Services
+
+<Terminal
+  command={`kubectl -n svc-lab create service clusterip web-headless --clusterip=None --tcp=80:80 --dry-run=client -o yaml \\
+  | sed 's/app: web-headless/app: web/' | kubectl apply -f -`}
+  output="service/web-headless created"
+/>
+
+<Terminal
+  command="kubectl run client --rm -it --restart=Never --image=busybox:1.36 -- nslookup web-headless.svc-lab.svc.cluster.local"
+  output={`Server:         10.96.0.10
+Address:        10.96.0.10:53
+
+Name:   web-headless.svc-lab.svc.cluster.local
+Address: 10.244.1.12
+Name:   web-headless.svc-lab.svc.cluster.local
+Address: 10.244.2.9
+Name:   web-headless.svc-lab.svc.cluster.local
+Address: 10.244.1.11`}
+/>
+
+One A record per Ready Pod, and no ClusterIP. Clients choose a backend themselves; kube-proxy is not involved.
+
+## ExternalName
+
+```yaml title="db-external.yaml"
+apiVersion: v1
+kind: Service
+metadata:
+  name: orders-db
+  namespace: svc-lab
+spec:
+  type: ExternalName
+  externalName: orders.db.example.com   # a DNS name, never an IP
+```
+
+Pods can now use `orders-db.svc-lab` and CoreDNS answers with a `CNAME` to `orders.db.example.com`. Nothing is proxied, ports are not remapped, and TLS certificates must still match the external name — which is why ExternalName is less useful for HTTPS than it looks.
+
+<Phase step="example" />
+
+## Example: preserving the client IP
+
+```yaml title="web-local.yaml"
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-local
+  namespace: svc-lab
+spec:
+  type: NodePort
+  externalTrafficPolicy: Local    # keep the client IP; only nodes with a local Pod answer
+  selector:
+    app: web
+  ports:
+    - port: 80
+      targetPort: 80
+      nodePort: 30081
+```
+
+Scale `web` to **one** replica and call port `30081` on each node IP from a client Pod: only the node hosting the Pod answers; the others time out. With `Cluster`, all three answer. That difference is exactly what a cloud load balancer's health check uses to stop sending traffic to empty nodes.
+
+<Phase step="guided" />
+
+## Guided exercise
+
+<Exercise kind="guided" title="Pin a NodePort and reach it through every node">
+
+1. Apply `web-np.yaml` from above (replace the generated `web-np` if you created it imperatively: `kubectl -n svc-lab delete svc web-np` first).
+2. List the node IPs with `kubectl get nodes -o wide`.
+3. From a client Pod, fetch `http://<node-ip>:30080` for **each** node, including the control plane. All three must answer.
+4. Inspect the Service and find the three ports in its spec:
+
+   ```bash
+   kubectl -n svc-lab get svc web-np -o jsonpath='{.spec.ports[0]}{"\n"}'
+   ```
+
+   Expected output: `{"nodePort":30080,"port":80,"protocol":"TCP","targetPort":80}`
+
+</Exercise>
+
+<Phase step="challenge" />
+
+## Independent challenge
+
+<Exercise kind="challenge" title="Give an external service an in-cluster name">
+
+Applications in namespace `shop` must reach a payment API at `api.payments.example.com` using the name `payments` (port 443), so that the address can later be swapped for an in-cluster Service without changing the applications.
+
+Create what is needed and explain how to verify it from a Pod, given that the domain does not really exist.
+
+<Solution>
+
+```bash
+kubectl create namespace shop
+kubectl -n shop create service externalname payments --external-name=api.payments.example.com
+kubectl run client -n shop --rm -it --restart=Never --image=busybox:1.36 -- nslookup payments
+```
+
+`nslookup` shows `payments.shop.svc.cluster.local canonical name = api.payments.example.com` followed by a resolution failure for the external name — which proves the Service is correct; only the (fictional) target does not resolve. Later, replacing it with a `ClusterIP` Service of the same name redirects every client without a configuration change.
+
+</Solution>
+</Exercise>
+
+<Phase step="troubleshooting" />
+
+## Troubleshooting
+
+<Exercise kind="troubleshooting" title="The node port that was refused">
+
+A colleague applies a Service with `nodePort: 8080` and the API server rejects it. Another Service of type `LoadBalancer` has shown `<pending>` for an hour. Explain both before reading on.
+
+<Solution>
+
+The first is a validation error from the API server:
+
+```text
+The Service "web-np" is invalid: spec.ports[0].nodePort: Invalid value: 8080:
+provided port is not in the valid range. The range of valid ports is 30000-32767
+```
+
+Node ports come from the API server's `--service-node-port-range` (default `30000-32767`). Either use a port inside the range, or omit `nodePort` and let Kubernetes allocate one.
+
+The second is not an error at all: no controller in the cluster implements `LoadBalancer`. Check for a cloud controller manager or MetalLB (`kubectl get pods -A | grep -i -e metallb -e cloud-controller`). Until one exists, use the NodePort that the Service already has, or an Ingress/Gateway.
+
+</Solution>
+</Exercise>
+
+<Callout type="mistakes">
+
+- Expecting `type: LoadBalancer` to work on bare-metal or kind without an implementation.
+- Choosing a `nodePort` outside the configured range.
+- Using `externalTrafficPolicy: Local` with Pods on only some nodes and then wondering why some node IPs time out.
+- Putting an **IP address** in `externalName`. It must be a DNS name.
+
+</Callout>
+
+<Phase step="check" />
+
+## Knowledge check
+
+<KnowledgeCheck
+  question="A NodePort Service is created in a three-node cluster. Its only Pod runs on node B. Which nodes answer on the node port with the default externalTrafficPolicy?"
+  options={['Only node B', 'All three nodes', 'Only control plane nodes', 'None until a LoadBalancer is created']}
+  answer={1}
+  explanation="With externalTrafficPolicy: Cluster, kube-proxy on every node opens the node port and forwards to any Ready endpoint, even on another node."
+/>
+
+<KnowledgeCheck
+  question="Your application must log the real client IP of requests arriving through a LoadBalancer Service. Which setting helps?"
+  options={['sessionAffinity: ClientIP', 'externalTrafficPolicy: Local', 'clusterIP: None', 'internalTrafficPolicy: Local']}
+  answer={1}
+  explanation="Local avoids the cross-node hop and its source NAT, so the Pod sees the original client address. sessionAffinity only pins clients to a backend; it does not stop SNAT."
+/>
+
+<KnowledgeCheck
+  question="What does DNS return for a headless Service with three Ready Pods?"
+  options={['One A record: the ClusterIP', 'Three A records: the Pod IPs', 'A CNAME to the first Pod', 'NXDOMAIN — headless Services have no DNS']}
+  answer={1}
+  explanation="clusterIP: None means there is no virtual IP; CoreDNS answers with the addresses of the Ready endpoints directly."
+/>
+
+## Clean up
+
+```bash
+kubectl -n svc-lab delete svc web-np web-lb web-headless web-local --ignore-not-found
+```
