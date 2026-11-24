@@ -1,0 +1,66 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $fullname := include "cka.fullname" . -}}
+{{- $controller := .Values.networkPolicy.ingressControllerNamespaceSelector -}}
+{{- /*
+Least-privilege ingress, written from the database outwards:
+
+  ingress controller ns ──► web :8080, ms-identity :3001, ms-learning :3002
+  ms-learning           ──► ms-identity :3001   (JWKS)
+  ms-identity, ms-learning ──► postgresql :5432
+
+Everything else to these Pods is dropped. (Egress is left open: the services
+only call each other and the database. Requires a CNI that enforces
+NetworkPolicy — most do; flannel alone does not.)
+*/ -}}
+{{- range $name := list "web" "ms-learning" }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-{{ $name }}
+  labels: {{- include "cka.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "cka.selector" (dict "ctx" $ "component" $name) | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector: {{- toYaml $controller | nindent 12 }}
+      ports: [{ port: http }]
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-ms-identity
+  labels: {{- include "cka.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "cka.selector" (dict "ctx" . "component" "ms-identity") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector: {{- toYaml $controller | nindent 12 }}
+        - podSelector:
+            matchLabels: {{- include "cka.selector" (dict "ctx" . "component" "ms-learning") | nindent 14 }}
+      ports: [{ port: http }]
+{{- if .Values.postgresql.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-postgresql
+  labels: {{- include "cka.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "cka.selector" (dict "ctx" . "component" "postgresql") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {{- include "cka.selector" (dict "ctx" . "component" "ms-identity") | nindent 14 }}
+        - podSelector:
+            matchLabels: {{- include "cka.selector" (dict "ctx" . "component" "ms-learning") | nindent 14 }}
+      ports: [{ port: 5432 }]
+{{- end }}
+{{- end }}

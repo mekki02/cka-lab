@@ -34,6 +34,7 @@ import { errorMessage } from '@/api/baseQuery';
 import { CodeBlock } from '@/components/CodeBlock';
 import { Markdown } from '@/components/Markdown';
 import { ErrorState, Loading } from '@/components/states';
+import { useCurriculum } from '@/hooks/useCurriculum';
 import { LAB_TYPE_LABEL } from './LabsPage';
 
 /** Checks are commands for the student's terminal; the platform never runs them. */
@@ -143,6 +144,7 @@ export const LabPage = () => {
   const { labId = '' } = useParams();
   const { data, error, isLoading, refetch } = useLabQuery(labId);
   const [update, updateState] = useUpdateLabProgressMutation();
+  const { index } = useCurriculum();
 
   if (error) return <ErrorState error={error} onRetry={refetch} />;
   if (isLoading || !data) return <Loading />;
@@ -164,7 +166,7 @@ export const LabPage = () => {
           Labs
         </Link>
         <Link component={RouterLink} to={`/learn/${lab.moduleId}`} underline="hover" color="inherit">
-          Module
+          {index?.modules.get(lab.moduleId)?.title ?? 'Module'}
         </Link>
       </Breadcrumbs>
       <Stack direction="row" spacing={1} sx={{ mb: 1.5 }}>
@@ -199,7 +201,7 @@ export const LabPage = () => {
           <Box component="ul" sx={{ pl: 2.5, mt: 0.5 }}>
             {lab.objectives.map(o => (
               <li key={o}>
-                <Typography variant="body2">{o}</Typography>
+                <Markdown dense>{o}</Markdown>
               </li>
             ))}
           </Box>

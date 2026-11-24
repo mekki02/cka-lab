@@ -1,0 +1,56 @@
+id: jsonpath
+title: JSONPath and output
+description: Extract exactly the field a task asks for, sort it, and write it to a file.
+order: 2
+sections:
+  - title: JSONPath basics
+    entries:
+      - title: One field
+        code: kubectl get pod web -o jsonpath='{.status.podIP}{"\n"}'
+        tags: [jsonpath]
+      - title: A field from every item
+        code: kubectl get pods -o jsonpath='{.items[*].metadata.name}'
+        tags: [jsonpath, items]
+      - title: One line per item with range
+        code: |
+          kubectl get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.nodeName}{"\n"}{end}'
+        tags: [jsonpath, range]
+      - title: Filter expressions
+        code: |
+          kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}'
+          kubectl get pods -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}'
+        tags: [jsonpath, filter]
+      - title: Keys containing dots
+        description: Escape dots in map keys with a backslash.
+        code: kubectl get node node-1 -o jsonpath='{.metadata.labels.kubernetes\.io/hostname}'
+        tags: [jsonpath, labels]
+      - title: Decode a Secret value
+        code: kubectl get secret db -o jsonpath='{.data.password}' | base64 -d; echo
+        tags: [secret, base64]
+  - title: Custom columns and sorting
+    entries:
+      - title: Custom columns
+        code: |
+          kubectl get pods -o custom-columns=NAME:.metadata.name,NODE:.spec.nodeName,IP:.status.podIP
+          kubectl get pods -o custom-columns=NAME:.metadata.name --no-headers
+        tags: [custom-columns]
+      - title: Sort
+        code: |
+          kubectl get pods --sort-by=.metadata.creationTimestamp
+          kubectl get pv --sort-by=.spec.capacity.storage
+          kubectl top pods -A --sort-by=memory
+        tags: [sort]
+      - title: Server-side filtering
+        code: |
+          kubectl get pods -A --field-selector spec.nodeName=node-1
+          kubectl get pods --field-selector status.phase!=Running
+        tags: [field-selector]
+  - title: Writing answers to files
+    entries:
+      - title: Save output exactly as asked
+        description: Re-read the task for the path and format; verify with cat.
+        code: |
+          kubectl get nodes -o jsonpath='{.items[*].metadata.name}' > /opt/answers/nodes.txt
+          kubectl logs web-xyz --tail=50 > /opt/answers/web.log
+          cat /opt/answers/nodes.txt
+        tags: [files, answers]

@@ -22,6 +22,7 @@ import { useQuizQuery, useSubmitQuizMutation } from '@/api/api';
 import { errorMessage } from '@/api/baseQuery';
 import { Markdown } from '@/components/Markdown';
 import { ErrorState, Loading } from '@/components/states';
+import { useCurriculum } from '@/hooks/useCurriculum';
 
 const TYPE_LABEL = { single: 'One answer', multiple: 'Select all that apply', scenario: 'Scenario · one answer' } as const;
 
@@ -102,6 +103,7 @@ export const QuizPage = () => {
   const [submit, submitState] = useSubmitQuizMutation();
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [attempt, setAttempt] = useState<QuizAttemptDto | null>(null);
+  const { index } = useCurriculum();
 
   if (error) return <ErrorState error={error} onRetry={refetch} />;
   if (isLoading || !quiz) return <Loading />;
@@ -125,7 +127,7 @@ export const QuizPage = () => {
           Quizzes
         </Link>
         <Link component={RouterLink} to={`/learn/${quiz.moduleId}`} underline="hover" color="inherit">
-          Module
+          {index?.modules.get(quiz.moduleId)?.title ?? 'Module'}
         </Link>
       </Breadcrumbs>
       <Typography variant="h1" sx={{ fontSize: { xs: '1.75rem', md: '2.25rem' } }}>

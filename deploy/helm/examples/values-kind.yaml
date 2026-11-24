@@ -1,0 +1,22 @@
+# Local test install on the kind cluster from deploy/kind/platform-cluster.yaml,
+# with locally built images loaded via `kind load docker-image`.
+publicUrl: https://cka.localhost:9443
+image:
+  registry: cka-lab
+  tag: dev
+  pullPolicy: IfNotPresent
+ingress:
+  className: traefik
+  host: cka.localhost
+  tls:
+    enabled: true
+    secretName: cka-lab-tls      # self-signed, created by hand for the test
+postgresql:
+  persistence:
+    size: 1Gi
+identity:
+  replicas: 2
+learning:
+  replicas: 2
+web:
+  replicas: 2

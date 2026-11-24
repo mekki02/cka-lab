@@ -1,0 +1,16 @@
+# Values used to render the plain manifests in this directory:
+#   helm template cka-lab deploy/helm/cka-lab -n cka-lab -f deploy/k8s/values-plain.yaml > deploy/k8s/cka-lab.yaml
+# Secrets are NOT rendered (existingSecret mode): create them from secret.example.yaml.
+publicUrl: https://cka.example.com
+image:
+  registry: ghcr.io/your-org/cka-lab
+  tag: "0.1.0"
+postgresql:
+  existingSecret: cka-lab-postgresql
+jwt:
+  existingSecret: cka-lab-jwt
+ingress:
+  className: traefik
+  host: cka.example.com
+  tls:
+    secretName: cka-lab-tls

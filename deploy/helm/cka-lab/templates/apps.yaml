@@ -1,0 +1,163 @@
+{{- $fullname := include "cka.fullname" . -}}
+{{- $root := . -}}
+{{- /*
+The three app components share one template: only the port, probes, env and
+mounts differ. Each gets a Deployment, a Service and (optionally) a PDB.
+*/ -}}
+{{- $components := list
+  (dict "name" "ms-identity" "key" "identity" "port" 3001 "ready" "/readyz" "live" "/healthz" "uid" 1000)
+  (dict "name" "ms-learning" "key" "learning" "port" 3002 "ready" "/readyz" "live" "/healthz" "uid" 1000)
+  (dict "name" "web" "key" "web" "port" 8080 "ready" "/healthz" "live" "/healthz" "uid" 101)
+-}}
+{{- range $c := $components }}
+{{- $vals := index $root.Values $c.key }}
+{{- $sel := dict "ctx" $root "component" $c.name }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-{{ $c.name }}
+  labels: {{- include "cka.labels" $root | nindent 4 }}
+spec:
+  selector: {{- include "cka.selector" $sel | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $c.port }}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-{{ $c.name }}
+  labels:
+    {{- include "cka.labels" $root | nindent 4 }}
+    {{- include "cka.selector" $sel | nindent 4 }}
+spec:
+  replicas: {{ $vals.replicas }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }   # never below the desired capacity
+  selector:
+    matchLabels: {{- include "cka.selector" $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cka.labels" $root | nindent 8 }}
+        {{- include "cka.selector" $sel | nindent 8 }}
+      {{- if eq $c.key "identity" }}
+      annotations:
+        # Roll the Pods when the signing key Secret changes.
+        checksum/jwt-key-id: {{ $root.Values.jwt.keyId | sha256sum | trunc 12 }}
+      {{- end }}
+    spec:
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false   # the apps never call the Kubernetes API
+      securityContext:
+        {{- toYaml $root.Values.podSecurityContext | nindent 8 }}
+        runAsUser: {{ $c.uid }}
+        runAsGroup: {{ $c.uid }}
+        # Secret volumes are owned by root; fsGroup makes the kubelet give the
+        # files this group, so the non-root process can read them (mode 0440).
+        fsGroup: {{ $c.uid }}
+      terminationGracePeriodSeconds: 30
+      {{- if gt (int $vals.replicas) 1 }}
+      # Spread replicas over nodes so one node failure does not take the app down.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- include "cka.selector" $sel | nindent 14 }}
+      {{- end }}
+      containers:
+        - name: {{ $c.name }}
+          image: {{ include "cka.image" $sel }}
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          ports:
+            - { name: http, containerPort: {{ $c.port }} }
+          env:
+            {{- if ne $c.key "web" }}
+            - { name: NODE_ENV, value: production }
+            - { name: PORT, value: {{ $c.port | quote }} }
+            - { name: LOG_LEVEL, value: {{ $root.Values.logLevel | quote }} }
+            - { name: TRUST_PROXY_HOPS, value: {{ $root.Values.trustProxyHops | quote }} }
+            {{- include "cka.dbEnv" (dict "ctx" $root "svc" $c.key) | nindent 12 }}
+            {{- end }}
+            {{- if eq $c.key "identity" }}
+            - { name: PUBLIC_URL, value: {{ $root.Values.publicUrl | quote }} }
+            - { name: COOKIE_SECURE, value: {{ $root.Values.cookieSecure | quote }} }
+            - { name: JWT_PRIVATE_KEY_FILE, value: /var/run/secrets/cka/jwt-private-key.pem }
+            - { name: JWT_KEY_ID, value: {{ $root.Values.jwt.keyId | quote }} }
+            {{- end }}
+            {{- if eq $c.key "learning" }}
+            - { name: JWKS_URL, value: "http://{{ $fullname }}-ms-identity:3001/.well-known/jwks.json" }
+            {{- end }}
+            {{- if eq $c.key "web" }}
+            - { name: APP_NAME, value: {{ $root.Values.appName | quote }} }
+            {{- end }}
+            {{- range $k, $v := ($vals.extraEnv | default dict) }}
+            - { name: {{ $k }}, value: {{ $v | quote }} }
+            {{- end }}
+          # startupProbe gives migrations time on first start; liveness and
+          # readiness only begin once it has succeeded.
+          startupProbe:
+            httpGet: { path: {{ $c.live }}, port: http }
+            periodSeconds: 3
+            failureThreshold: 40
+          livenessProbe:
+            httpGet: { path: {{ $c.live }}, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: {{ $c.ready }}, port: http }
+            periodSeconds: 5
+            failureThreshold: 2
+          lifecycle:
+            # Keep serving for a few seconds after SIGTERM is scheduled, while
+            # the endpoint removal propagates to every node's kube-proxy and
+            # the Ingress controller. Prevents errors during rolling updates.
+            preStop:
+              exec: { command: ["sleep", "5"] }
+          resources: {{- toYaml $vals.resources | nindent 12 }}
+          {{- include "cka.containerSecurity" $root | nindent 10 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            {{- if eq $c.key "identity" }}
+            - { name: jwt, mountPath: /var/run/secrets/cka, readOnly: true }
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+        {{- if eq $c.key "identity" }}
+        - name: jwt
+          secret:
+            secretName: {{ include "cka.jwtSecretName" $root }}
+            defaultMode: 0440
+        {{- end }}
+      {{- with $root.Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $root.Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $root.Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if and $root.Values.podDisruptionBudget.enabled (gt (int $vals.replicas) 1) }}
+---
+# Voluntary disruptions (kubectl drain, cluster upgrades) may evict at most
+# one replica at a time.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullname }}-{{ $c.name }}
+  labels: {{- include "cka.labels" $root | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {{- include "cka.selector" $sel | nindent 6 }}
+{{- end }}
+{{- end }}

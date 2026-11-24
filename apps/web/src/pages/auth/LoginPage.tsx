@@ -4,11 +4,9 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, useLoginMutation } from '@/api/api';
 import { errorMessage } from '@/api/baseQuery';
 import { useAppDispatch } from '@/hooks/redux';
+import { safeNext } from '@/utils/safeNext';
 import { AuthLayout } from './AuthLayout';
 
-/** Only allow redirects to paths on this site (no open redirect via ?next=). */
-export const safeNext = (next: string | null): string =>
-  next && next.startsWith('/') && !next.startsWith('//') ? next : '/';
 
 export const LoginPage = () => {
   const [params] = useSearchParams();

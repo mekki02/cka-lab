@@ -1,0 +1,18 @@
+# Build context is the repo root (the services need the shared packages).
+# Keep it small and free of secrets.
+**/node_modules
+**/dist
+**/coverage
+**/*.tsbuildinfo
+.git
+.github
+.claude
+.env
+.env.*
+!.env.example
+secrets
+*.pem
+deploy
+docs
+**/test-results
+**/playwright-report

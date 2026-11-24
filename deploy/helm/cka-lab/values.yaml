@@ -1,0 +1,122 @@
+# Default values for cka-lab. Every value is documented in docs/CONFIGURATION.md.
+# Override per environment with -f my-values.yaml or --set.
+
+# -- URL people open in their browser (scheme + host, no trailing slash).
+# Used for invitation and reset links. Must match ingress.host / gateway.hostnames.
+publicUrl: https://cka.example.com
+# -- Product name shown in the UI.
+appName: CKA Lab
+
+image:
+  # -- Registry + path prefix; images are <registry>/ms-identity, /ms-learning, /web.
+  registry: ghcr.io/your-org/cka-lab
+  # -- Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+# -- e.g. [{ name: regcred }] for a private registry.
+imagePullSecrets: []
+
+# -- Secure (HTTPS-only) cookies. Only disable for plain-HTTP local tests.
+cookieSecure: true
+# -- Number of proxies in front of the services (the Ingress controller = 1).
+trustProxyHops: 1
+logLevel: info
+
+# Token signing key for ms-identity (Ed25519, PKCS#8 PEM).
+jwt:
+  # -- Use an existing Secret (recommended for GitOps). Must contain `jwt-private-key.pem`.
+  existingSecret: ""
+  # -- Change when rotating keys.
+  keyId: key-1
+
+identity:
+  replicas: 2
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 384Mi }
+  # -- Extra environment variables, e.g. { AUTH_RATE_LIMIT_PER_MINUTE: "10" }.
+  extraEnv: {}
+
+learning:
+  replicas: 2
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 384Mi }
+  extraEnv: {}
+
+web:
+  replicas: 2
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 128Mi }
+
+# Bundled PostgreSQL (one StatefulSet, one database + login per service).
+# Fine for a small private installation; for anything bigger use a managed
+# database or an operator and set postgresql.enabled=false + externalDatabase.
+postgresql:
+  enabled: true
+  image: postgres:17-alpine
+  # -- Existing Secret with keys `postgres-password`, `identity-password`, `learning-password`.
+  # When empty, the chart creates one with random passwords and keeps them across upgrades.
+  existingSecret: ""
+  persistence:
+    size: 5Gi
+    # -- Empty = the cluster's default StorageClass.
+    storageClass: ""
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1Gi }
+
+# Used when postgresql.enabled=false.
+externalDatabase:
+  host: ""
+  port: 5432
+  ssl: true
+  identity:
+    database: identity
+    user: identity
+    # -- Secret holding the password, and the key inside it.
+    existingSecret: ""
+    passwordKey: password
+  learning:
+    database: learning
+    user: learning
+    existingSecret: ""
+    passwordKey: password
+
+ingress:
+  enabled: true
+  # -- IngressClass of your controller (traefik, nginx, haproxy…). Empty = cluster default.
+  className: ""
+  host: cka.example.com
+  annotations: {}
+  tls:
+    enabled: true
+    # -- Secret with the certificate (e.g. created by cert-manager).
+    secretName: cka-lab-tls
+
+# Alternative to Ingress: Gateway API HTTPRoute attached to an existing Gateway.
+gateway:
+  enabled: false
+  parentRefs: []
+  #  - name: public
+  #    namespace: gateway-system
+  hostnames: []
+
+networkPolicy:
+  enabled: true
+  # -- Namespace(s) of the Ingress/Gateway controller allowed to reach the app.
+  ingressControllerNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: traefik
+
+podDisruptionBudget:
+  enabled: true
+
+# -- Applied to every app Pod.
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile: { type: RuntimeDefault }
+nodeSelector: {}
+tolerations: []
+affinity: {}

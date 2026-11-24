@@ -1,0 +1,115 @@
+id: kubectl
+title: kubectl essentials
+description: Generators, inspection and changes — the commands behind most exam tasks.
+order: 1
+sections:
+  - title: Shell setup
+    entries:
+      - title: Alias and dry-run shortcut
+        description: Run at the start of the exam. Completion for `k` works once the alias is defined.
+        code: |
+          alias k=kubectl
+          complete -o default -F __start_kubectl k
+          export do="--dry-run=client -o yaml"
+          export now="--force --grace-period=0"
+        tags: [setup, alias]
+      - title: Contexts and namespaces
+        code: |
+          kubectl config get-contexts
+          kubectl config use-context <context>
+          kubectl config set-context --current --namespace=<ns>
+          kubectl config view --minify -o jsonpath='{..namespace}'
+        tags: [context, namespace]
+  - title: Generate manifests
+    entries:
+      - title: Pod
+        code: kubectl run web --image=nginx:1.27 --port=80 --labels=app=web $do > pod.yaml
+        tags: [pod, generator]
+      - title: Pod running a command
+        code: kubectl run tools --image=busybox:1.36 --restart=Never $do -- sh -c 'sleep 3600' > tools.yaml
+        tags: [pod, command]
+      - title: Deployment
+        code: kubectl create deployment web --image=nginx:1.27 --replicas=3 --port=80 $do > deploy.yaml
+        tags: [deployment, generator]
+      - title: Service
+        code: |
+          kubectl expose deployment web --port=80 --target-port=8080 $do
+          kubectl expose deployment web --type=NodePort --port=80 $do      # add nodePort by hand
+          kubectl create service clusterip web --tcp=80:8080 $do           # selector = app: web
+        tags: [service, expose]
+      - title: ConfigMap and Secret
+        code: |
+          kubectl create configmap app --from-literal=MODE=prod --from-file=app.conf $do
+          kubectl create secret generic db --from-literal=user=app --from-literal=password=s3cr3t $do
+          kubectl create secret tls web-tls --cert=tls.crt --key=tls.key $do
+        tags: [configmap, secret]
+      - title: Job and CronJob
+        code: |
+          kubectl create job once --image=busybox:1.36 $do -- sh -c 'date'
+          kubectl create cronjob nightly --image=busybox:1.36 --schedule='0 2 * * *' $do -- date
+          kubectl create job manual-run --from=cronjob/nightly       # trigger a CronJob now
+        tags: [job, cronjob]
+      - title: RBAC
+        code: |
+          kubectl create serviceaccount deployer
+          kubectl create role pod-reader --verb=get,list,watch --resource=pods
+          kubectl create rolebinding pod-reader --role=pod-reader --serviceaccount=default:deployer
+          kubectl create clusterrole node-reader --verb=get,list --resource=nodes
+          kubectl create clusterrolebinding jane-nodes --clusterrole=node-reader --user=jane
+        tags: [rbac, role, serviceaccount]
+      - title: Autoscaling and quotas
+        code: |
+          kubectl autoscale deployment web --min=2 --max=6 --cpu=60%     # older kubectl: --cpu-percent=60
+          kubectl create quota team --hard=pods=10,requests.cpu=4,requests.memory=8Gi -n team-a
+          kubectl create priorityclass critical --value=100000 --description="critical apps"
+        tags: [hpa, quota]
+  - title: Inspect
+    entries:
+      - title: Getting and describing
+        code: |
+          kubectl get pods -o wide --show-labels
+          kubectl get pods -A -l app=web,tier!=db
+          kubectl get deploy web -o yaml
+          kubectl describe pod web-xyz            # read Events at the bottom first
+          kubectl get events -A --sort-by=.lastTimestamp
+          kubectl api-resources --namespaced=true
+          kubectl explain pod.spec.containers.securityContext --recursive
+        tags: [get, describe, explain, events]
+      - title: Permissions
+        code: |
+          kubectl auth can-i create deployments -n prod
+          kubectl auth can-i list pods --as=system:serviceaccount:prod:deployer -n prod
+          kubectl auth can-i --list --as=jane -n prod
+        tags: [rbac, can-i]
+  - title: Change
+    entries:
+      - title: Update workloads
+        code: |
+          kubectl set image deploy/web nginx=nginx:1.28
+          kubectl set resources deploy/web --requests=cpu=100m,memory=128Mi --limits=memory=256Mi
+          kubectl set env deploy/web MODE=prod
+          kubectl scale deploy/web --replicas=5
+          kubectl rollout status deploy/web
+          kubectl rollout history deploy/web
+          kubectl rollout undo deploy/web --to-revision=2
+          kubectl rollout restart deploy/web
+        tags: [rollout, image, scale]
+      - title: Patch
+        code: |
+          kubectl patch svc web -p '{"spec":{"selector":{"app":"web"}}}'
+          kubectl patch deploy web --type=json \
+            -p '[{"op":"replace","path":"/spec/template/spec/containers/0/image","value":"nginx:1.28"}]'
+        tags: [patch]
+      - title: Replace an immutable Pod
+        description: When `kubectl edit pod` refuses a change, it saves your copy to /tmp.
+        code: kubectl replace --force -f /tmp/kubectl-edit-XXXX.yaml
+        tags: [replace, edit]
+      - title: Nodes
+        code: |
+          kubectl cordon node-1
+          kubectl drain node-1 --ignore-daemonsets --delete-emptydir-data
+          kubectl uncordon node-1
+          kubectl taint node node-1 dedicated=gpu:NoSchedule
+          kubectl taint node node-1 dedicated-            # remove
+          kubectl label node node-1 disk=ssd
+        tags: [node, drain, taint]

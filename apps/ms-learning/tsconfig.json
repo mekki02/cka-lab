@@ -9,7 +9,12 @@
     "emitDecoratorMetadata": true,
     "strictPropertyInitialization": false,
     "declaration": false,
-    "types": ["node", "jest"]
+    "types": [
+      "node",
+      "vitest/globals"
+    ]
   },
-  "include": ["src"]
+  "include": [
+    "src"
+  ]
 }

@@ -12,7 +12,7 @@
     "cli:dev": "nest build && node dist/cli.js",
     "migration:run": "typeorm migration:run -d dist/database/data-source.js",
     "migration:revert": "typeorm migration:revert -d dist/database/data-source.js",
-    "test": "jest"
+    "test": "vitest run"
   },
   "dependencies": {
     "@cka/auth-kit": "0.1.0",
@@ -44,18 +44,10 @@
     "@nestjs/testing": "^12.6.0",
     "@types/cookie-parser": "^1.4.9",
     "@types/express": "^5.0.3",
-    "@types/jest": "^30.0.0",
     "@types/node": "^24.0.0",
     "@types/supertest": "^6.0.3",
-    "jest": "^30.0.0",
     "pino-pretty": "^13.0.0",
     "supertest": "^7.1.0",
-    "ts-jest": "^29.4.0"
-  },
-  "jest": {
-    "preset": "ts-jest",
-    "testEnvironment": "node",
-    "rootDir": "src",
-    "testRegex": ".*\\.spec\\.ts$"
+    "vitest": "^4.1.11"
   }
 }

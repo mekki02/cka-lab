@@ -1,0 +1,13 @@
+apiVersion: v2
+name: cka-lab
+description: Self-hosted CKA learning platform — web app, identity and learning services, optional bundled PostgreSQL.
+type: application
+# Chart version: bump on any chart change.
+version: 0.1.0
+# Application version: default image tag for all three images.
+appVersion: "0.1.0"
+kubeVersion: ">=1.29.0-0"
+keywords: [kubernetes, cka, learning]
+home: https://example.com/cka-lab
+maintainers:
+  - name: cka-lab maintainers

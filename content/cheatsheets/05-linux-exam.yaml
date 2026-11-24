@@ -1,0 +1,70 @@
+id: linux-exam
+title: Linux tools and exam workflow
+description: The node-level tools and habits that save minutes.
+order: 5
+sections:
+  - title: On a node
+    entries:
+      - title: Services and logs
+        code: |
+          systemctl status kubelet containerd
+          systemctl restart kubelet && systemctl enable kubelet
+          journalctl -u kubelet -f
+          journalctl -u kubelet --since "10 min ago" --no-pager
+        tags: [systemctl, journalctl]
+      - title: Containers without the API
+        code: |
+          crictl ps -a
+          crictl pods
+          crictl logs <container-id>
+          crictl inspect <container-id> | grep -i -A3 mounts
+          crictl images
+        tags: [crictl, runtime]
+      - title: Network
+        code: |
+          ss -tlnp                       # who listens on which port
+          ip addr; ip route
+          nc -zv 10.0.0.10 6443          # is a port reachable?
+          curl -k https://127.0.0.1:6443/livez
+        tags: [network, ss, ip]
+      - title: Certificates
+        code: |
+          kubeadm certs check-expiration
+          openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -subject -enddate -ext subjectAltName
+        tags: [certificates, openssl]
+  - title: Editing fast
+    entries:
+      - title: vim settings for YAML
+        description: Add to ~/.vimrc at the start of the exam.
+        lang: text
+        code: |
+          set expandtab tabstop=2 shiftwidth=2 autoindent number
+        tags: [vim]
+      - title: Useful vim moves
+        lang: text
+        code: |
+          :set paste          paste without auto-indent chaos (then :set nopaste)
+          V + > / <           indent / outdent selected lines
+          dG                  delete to end of file
+          u / Ctrl-r          undo / redo
+          /text  n            search, next match
+        tags: [vim]
+  - title: Exam workflow
+    entries:
+      - title: Per task
+        lang: text
+        code: |
+          1. Run the task's "kubectl config use-context ..." line. Every time.
+          2. Read the whole task; note namespace, names, ports, file paths.
+          3. Generate (--dry-run=client -o yaml), edit, apply.
+          4. Verify with get/describe/logs exactly what was asked.
+          5. Stuck > 5-7 min? Flag it and move on; come back at the end.
+        tags: [exam, strategy]
+      - title: Points to remember
+        lang: text
+        code: |
+          - Allowed docs: kubernetes.io/docs, kubernetes.io/blog and project docs for tools in the task.
+          - Copy/paste: Ctrl+Shift+C / Ctrl+Shift+V in the exam terminal.
+          - Use `sudo -i` on nodes when root is needed; exit back to the base host afterwards.
+          - Weights differ per task: do high-value tasks you know first.
+        tags: [exam, rules]

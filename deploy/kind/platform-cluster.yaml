@@ -1,0 +1,15 @@
+# A local cluster to test the *platform's* deployment (not the lab cluster).
+#
+#   kind create cluster --name cka-platform --config deploy/kind/platform-cluster.yaml
+#
+# Traefik is installed as a NodePort Service on 30080/30443; kind maps those
+# to localhost:9080 / localhost:9443 on your machine.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - { containerPort: 30080, hostPort: 9080, protocol: TCP }
+      - { containerPort: 30443, hostPort: 9443, protocol: TCP }
+  - role: worker
+  - role: worker

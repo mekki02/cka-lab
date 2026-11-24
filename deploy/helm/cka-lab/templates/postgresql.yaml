@@ -1,0 +1,105 @@
+{{- if .Values.postgresql.enabled }}
+{{- $fullname := include "cka.fullname" . }}
+{{- $sel := dict "ctx" . "component" "postgresql" }}
+# Creates one database and one login per service on first start (empty volume
+# only) — the same script Docker Compose uses.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-postgresql-init
+  labels: {{- include "cka.labels" . | nindent 4 }}
+data:
+  01-service-databases.sh: |
+{{ .Files.Get "files/01-service-databases.sh" | indent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-postgresql
+  labels: {{- include "cka.labels" . | nindent 4 }}
+spec:
+  clusterIP: None     # headless: stable DNS for the StatefulSet Pod
+  selector: {{- include "cka.selector" $sel | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-postgresql
+  labels: {{- include "cka.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $fullname }}-postgresql
+  replicas: 1
+  selector:
+    matchLabels: {{- include "cka.selector" $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cka.labels" . | nindent 8 }}
+        {{- include "cka.selector" $sel | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70        # the "postgres" user of the alpine image
+        fsGroup: 70
+        seccompProfile: { type: RuntimeDefault }
+      # Postgres needs time to flush and shut down cleanly on SIGTERM.
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: postgresql
+          image: {{ .Values.postgresql.image }}
+          ports:
+            - { name: postgres, containerPort: 5432 }
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "cka.dbSecretName" . }}, key: postgres-password } }
+            - name: IDENTITY_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "cka.dbSecretName" . }}, key: identity-password } }
+            - name: LEARNING_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "cka.dbSecretName" . }}, key: learning-password } }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "postgres", "-h", "127.0.0.1"] }
+            periodSeconds: 5
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", "postgres", "-h", "127.0.0.1"] }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 6
+          resources: {{- toYaml .Values.postgresql.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+            - { name: run, mountPath: /var/run/postgresql }
+      volumes:
+        - name: init
+          configMap: { name: {{ $fullname }}-postgresql-init, defaultMode: 0555 }
+        - name: run
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+  # The data lives in a PersistentVolumeClaim, not in the container: it
+  # survives Pod restarts, rescheduling and chart upgrades.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.postgresql.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgresql.persistence.size }}
+{{- end }}

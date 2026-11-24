@@ -21,7 +21,14 @@ export class KeysService implements OnModuleInit {
   constructor(private readonly env: Env) {}
 
   async onModuleInit(): Promise<void> {
-    const pem = readSecret(this.env.JWT_PRIVATE_KEY, this.env.JWT_PRIVATE_KEY_FILE);
+    let pem: string | undefined;
+    try {
+      pem = readSecret(this.env.JWT_PRIVATE_KEY, this.env.JWT_PRIVATE_KEY_FILE);
+    } catch (err) {
+      // Most often a mounted Secret the non-root user cannot read: check the
+      // Pod's fsGroup and the volume's defaultMode.
+      throw new Error(`Cannot read JWT_PRIVATE_KEY_FILE (${this.env.JWT_PRIVATE_KEY_FILE}): ${(err as Error).message}`);
+    }
     if (pem) {
       this.privateKey = createPrivateKey(pem.replace(/\\n/g, '\n'));
       if (this.privateKey.asymmetricKeyType !== 'ed25519') {

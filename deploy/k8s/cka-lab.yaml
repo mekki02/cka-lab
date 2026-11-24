@@ -1,0 +1,727 @@
+# GENERATED from the Helm chart — do not edit by hand. See deploy/k8s/README.md.
+---
+# Source: cka-lab/templates/networkpolicy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cka-lab-web
+  labels:
+    app.kubernetes.io/part-of: cka-lab
+    app.kubernetes.io/instance: cka-lab
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: web
+      app.kubernetes.io/instance: cka-lab
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+      ports: [{ port: http }]
+
+---
+# Source: cka-lab/templates/networkpolicy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cka-lab-ms-learning
+  labels:
+    app.kubernetes.io/part-of: cka-lab
+    app.kubernetes.io/instance: cka-lab
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ms-learning
+      app.kubernetes.io/instance: cka-lab
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+      ports: [{ port: http }]
+
+---
+# Source: cka-lab/templates/networkpolicy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cka-lab-ms-identity
+  labels:
+    app.kubernetes.io/part-of: cka-lab
+    app.kubernetes.io/instance: cka-lab
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ms-identity
+      app.kubernetes.io/instance: cka-lab
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ms-learning
+              app.kubernetes.io/instance: cka-lab
+      ports: [{ port: http }]
+
+---
+# Source: cka-lab/templates/networkpolicy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cka-lab-postgresql
+  labels:
+    app.kubernetes.io/part-of: cka-lab
+    app.kubernetes.io/instance: cka-lab
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+      app.kubernetes.io/instance: cka-lab
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ms-identity
+              app.kubernetes.io/instance: cka-lab
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ms-learning
+              app.kubernetes.io/instance: cka-lab
+      ports: [{ port: 5432 }]
+
+---
+# Source: cka-lab/templates/apps.yaml
+# Voluntary disruptions (kubectl drain, cluster upgrades) may evict at most
+# one replica at a time.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cka-lab-ms-identity
+  labels:
+    app.kubernetes.io/part-of: cka-lab
+    app.kubernetes.io/instance: cka-lab
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ms-identity
+      app.kubernetes.io/instance: cka-lab
+
+---
+# Source: cka-lab/templates/apps.yaml
+# Voluntary disruptions (kubectl drain, cluster upgrades) may evict at most
+# one replica at a time.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cka-lab-ms-learning
+  labels:
+    app.kubernetes.io/part-of: cka-lab
+    app.kubernetes.io/instance: cka-lab
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ms-learning
+      app.kubernetes.io/instance: cka-lab
+
+---
+# Source: cka-lab/templates/apps.yaml
+# Voluntary disruptions (kubectl drain, cluster upgrades) may evict at most
+# one replica at a time.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cka-lab-web
+  labels:
+    app.kubernetes.io/part-of: cka-lab
+    app.kubernetes.io/instance: cka-lab
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: web
+      app.kubernetes.io/instance: cka-lab
+
+---
+# Source: cka-lab/templates/postgresql.yaml
+# Creates one database and one login per service on first start (empty volume
+# only) — the same script Docker Compose uses.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cka-lab-postgresql-init
+  labels:
+    app.kubernetes.io/part-of: cka-lab
+    app.kubernetes.io/instance: cka-lab
+    app.kubernetes.io/version: "0.1.0"
+data:
+  01-service-databases.sh: |
+    #!/bin/sh
+    # Runs once, the first time the Postgres data volume is initialised.
+    #
+    # Each service gets its own database AND its own login role that owns only
+    # that database. ms-learning therefore cannot read the users table even if it
+    # were compromised — the same isolation you would get from separate database
+    # servers, without running several.
+    #
+    # Passwords come from the environment (see .env.example); nothing is hardcoded.
+    set -eu
+    
+    : "${IDENTITY_DB_PASSWORD:?IDENTITY_DB_PASSWORD must be set}"
+    : "${LEARNING_DB_PASSWORD:?LEARNING_DB_PASSWORD must be set}"
+    
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+      -v identity_pw="$IDENTITY_DB_PASSWORD" -v learning_pw="$LEARNING_DB_PASSWORD" <<-'SQL'
+      CREATE ROLE identity LOGIN PASSWORD :'identity_pw';
+      CREATE DATABASE identity OWNER identity;
+      REVOKE ALL ON DATABASE identity FROM PUBLIC;
+    
+      CREATE ROLE learning LOGIN PASSWORD :'learning_pw';
+      CREATE DATABASE learning OWNER learning;
+      REVOKE ALL ON DATABASE learning FROM PUBLIC;
+    SQL
+    
+    echo "[init] created databases: identity, learning"
+    
+
+---
+# Source: cka-lab/templates/apps.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: cka-lab-ms-identity
+  labels:
+    app.kubernetes.io/part-of: cka-lab
+    app.kubernetes.io/instance: cka-lab
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  selector:
+    app.kubernetes.io/name: ms-identity
+    app.kubernetes.io/instance: cka-lab
+  ports:
+    - name: http
+      port: 3001
+      targetPort: http
+
+---
+# Source: cka-lab/templates/apps.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: cka-lab-ms-learning
+  labels:
+    app.kubernetes.io/part-of: cka-lab
+    app.kubernetes.io/instance: cka-lab
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  selector:
+    app.kubernetes.io/name: ms-learning
+    app.kubernetes.io/instance: cka-lab
+  ports:
+    - name: http
+      port: 3002
+      targetPort: http
+
+---
+# Source: cka-lab/templates/apps.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: cka-lab-web
+  labels:
+    app.kubernetes.io/part-of: cka-lab
+    app.kubernetes.io/instance: cka-lab
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  selector:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/instance: cka-lab
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+
+---
+# Source: cka-lab/templates/postgresql.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: cka-lab-postgresql
+  labels:
+    app.kubernetes.io/part-of: cka-lab
+    app.kubernetes.io/instance: cka-lab
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  clusterIP: None     # headless: stable DNS for the StatefulSet Pod
+  selector:
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/instance: cka-lab
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+
+---
+# Source: cka-lab/templates/apps.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cka-lab-ms-identity
+  labels:
+    app.kubernetes.io/part-of: cka-lab
+    app.kubernetes.io/instance: cka-lab
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/name: ms-identity
+    app.kubernetes.io/instance: cka-lab
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }   # never below the desired capacity
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ms-identity
+      app.kubernetes.io/instance: cka-lab
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: cka-lab
+        app.kubernetes.io/instance: cka-lab
+        app.kubernetes.io/version: "0.1.0"
+        app.kubernetes.io/name: ms-identity
+        app.kubernetes.io/instance: cka-lab
+      annotations:
+        # Roll the Pods when the signing key Secret changes.
+        checksum/jwt-key-id: be2974546978
+    spec:
+      automountServiceAccountToken: false   # the apps never call the Kubernetes API
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+        runAsUser: 1000
+        runAsGroup: 1000
+        # Secret volumes are owned by root; fsGroup makes the kubelet give the
+        # files this group, so the non-root process can read them (mode 0440).
+        fsGroup: 1000
+      terminationGracePeriodSeconds: 30
+      # Spread replicas over nodes so one node failure does not take the app down.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: ms-identity
+              app.kubernetes.io/instance: cka-lab
+      containers:
+        - name: ms-identity
+          image: ghcr.io/your-org/cka-lab/ms-identity:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 3001 }
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: PORT, value: "3001" }
+            - { name: LOG_LEVEL, value: "info" }
+            - { name: TRUST_PROXY_HOPS, value: "1" }
+            - name: DATABASE_HOST
+              value: "cka-lab-postgresql"
+            - name: DATABASE_PORT
+              value: "5432"
+            - name: DATABASE_NAME
+              value: identity
+            - name: DATABASE_USER
+              value: identity
+            - name: DATABASE_SSL
+              value: "false"
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cka-lab-postgresql
+                  key: identity-password
+            - { name: PUBLIC_URL, value: "https://cka.example.com" }
+            - { name: COOKIE_SECURE, value: "true" }
+            - { name: JWT_PRIVATE_KEY_FILE, value: /var/run/secrets/cka/jwt-private-key.pem }
+            - { name: JWT_KEY_ID, value: "key-1" }
+          # startupProbe gives migrations time on first start; liveness and
+          # readiness only begin once it has succeeded.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 3
+            failureThreshold: 40
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+            failureThreshold: 2
+          lifecycle:
+            # Keep serving for a few seconds after SIGTERM is scheduled, while
+            # the endpoint removal propagates to every node's kube-proxy and
+            # the Ingress controller. Prevents errors during rolling updates.
+            preStop:
+              exec: { command: ["sleep", "5"] }
+          resources:
+            limits:
+              memory: 384Mi
+            requests:
+              cpu: 50m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: jwt, mountPath: /var/run/secrets/cka, readOnly: true }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+        - name: jwt
+          secret:
+            secretName: cka-lab-jwt
+            defaultMode: 0440
+
+---
+# Source: cka-lab/templates/apps.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cka-lab-ms-learning
+  labels:
+    app.kubernetes.io/part-of: cka-lab
+    app.kubernetes.io/instance: cka-lab
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/name: ms-learning
+    app.kubernetes.io/instance: cka-lab
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }   # never below the desired capacity
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ms-learning
+      app.kubernetes.io/instance: cka-lab
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: cka-lab
+        app.kubernetes.io/instance: cka-lab
+        app.kubernetes.io/version: "0.1.0"
+        app.kubernetes.io/name: ms-learning
+        app.kubernetes.io/instance: cka-lab
+    spec:
+      automountServiceAccountToken: false   # the apps never call the Kubernetes API
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+        runAsUser: 1000
+        runAsGroup: 1000
+        # Secret volumes are owned by root; fsGroup makes the kubelet give the
+        # files this group, so the non-root process can read them (mode 0440).
+        fsGroup: 1000
+      terminationGracePeriodSeconds: 30
+      # Spread replicas over nodes so one node failure does not take the app down.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: ms-learning
+              app.kubernetes.io/instance: cka-lab
+      containers:
+        - name: ms-learning
+          image: ghcr.io/your-org/cka-lab/ms-learning:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 3002 }
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: PORT, value: "3002" }
+            - { name: LOG_LEVEL, value: "info" }
+            - { name: TRUST_PROXY_HOPS, value: "1" }
+            - name: DATABASE_HOST
+              value: "cka-lab-postgresql"
+            - name: DATABASE_PORT
+              value: "5432"
+            - name: DATABASE_NAME
+              value: learning
+            - name: DATABASE_USER
+              value: learning
+            - name: DATABASE_SSL
+              value: "false"
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cka-lab-postgresql
+                  key: learning-password
+            - { name: JWKS_URL, value: "http://cka-lab-ms-identity:3001/.well-known/jwks.json" }
+          # startupProbe gives migrations time on first start; liveness and
+          # readiness only begin once it has succeeded.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 3
+            failureThreshold: 40
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+            failureThreshold: 2
+          lifecycle:
+            # Keep serving for a few seconds after SIGTERM is scheduled, while
+            # the endpoint removal propagates to every node's kube-proxy and
+            # the Ingress controller. Prevents errors during rolling updates.
+            preStop:
+              exec: { command: ["sleep", "5"] }
+          resources:
+            limits:
+              memory: 384Mi
+            requests:
+              cpu: 50m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+
+---
+# Source: cka-lab/templates/apps.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cka-lab-web
+  labels:
+    app.kubernetes.io/part-of: cka-lab
+    app.kubernetes.io/instance: cka-lab
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/name: web
+    app.kubernetes.io/instance: cka-lab
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }   # never below the desired capacity
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: web
+      app.kubernetes.io/instance: cka-lab
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: cka-lab
+        app.kubernetes.io/instance: cka-lab
+        app.kubernetes.io/version: "0.1.0"
+        app.kubernetes.io/name: web
+        app.kubernetes.io/instance: cka-lab
+    spec:
+      automountServiceAccountToken: false   # the apps never call the Kubernetes API
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+        runAsUser: 101
+        runAsGroup: 101
+        # Secret volumes are owned by root; fsGroup makes the kubelet give the
+        # files this group, so the non-root process can read them (mode 0440).
+        fsGroup: 101
+      terminationGracePeriodSeconds: 30
+      # Spread replicas over nodes so one node failure does not take the app down.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: web
+              app.kubernetes.io/instance: cka-lab
+      containers:
+        - name: web
+          image: ghcr.io/your-org/cka-lab/web:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            - { name: APP_NAME, value: "CKA Lab" }
+          # startupProbe gives migrations time on first start; liveness and
+          # readiness only begin once it has succeeded.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 3
+            failureThreshold: 40
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            failureThreshold: 2
+          lifecycle:
+            # Keep serving for a few seconds after SIGTERM is scheduled, while
+            # the endpoint removal propagates to every node's kube-proxy and
+            # the Ingress controller. Prevents errors during rolling updates.
+            preStop:
+              exec: { command: ["sleep", "5"] }
+          resources:
+            limits:
+              memory: 128Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+
+---
+# Source: cka-lab/templates/postgresql.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: cka-lab-postgresql
+  labels:
+    app.kubernetes.io/part-of: cka-lab
+    app.kubernetes.io/instance: cka-lab
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  serviceName: cka-lab-postgresql
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+      app.kubernetes.io/instance: cka-lab
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: cka-lab
+        app.kubernetes.io/instance: cka-lab
+        app.kubernetes.io/version: "0.1.0"
+        app.kubernetes.io/name: postgresql
+        app.kubernetes.io/instance: cka-lab
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70        # the "postgres" user of the alpine image
+        fsGroup: 70
+        seccompProfile: { type: RuntimeDefault }
+      # Postgres needs time to flush and shut down cleanly on SIGTERM.
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: postgresql
+          image: postgres:17-alpine
+          ports:
+            - { name: postgres, containerPort: 5432 }
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: cka-lab-postgresql, key: postgres-password } }
+            - name: IDENTITY_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: cka-lab-postgresql, key: identity-password } }
+            - name: LEARNING_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: cka-lab-postgresql, key: learning-password } }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "postgres", "-h", "127.0.0.1"] }
+            periodSeconds: 5
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", "postgres", "-h", "127.0.0.1"] }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 6
+          resources:
+            limits:
+              memory: 1Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+            - { name: run, mountPath: /var/run/postgresql }
+      volumes:
+        - name: init
+          configMap: { name: cka-lab-postgresql-init, defaultMode: 0555 }
+        - name: run
+          emptyDir: {}
+  # The data lives in a PersistentVolumeClaim, not in the container: it
+  # survives Pod restarts, rescheduling and chart upgrades.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+
+---
+# Source: cka-lab/templates/routing.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cka-lab
+  labels:
+    app.kubernetes.io/part-of: cka-lab
+    app.kubernetes.io/instance: cka-lab
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: ["cka.example.com"]
+      secretName: cka-lab-tls
+  rules:
+    - host: "cka.example.com"
+      http:
+        paths:
+          - path: /api/identity
+            pathType: Prefix
+            backend: { service: { name: cka-lab-ms-identity, port: { name: http } } }
+          - path: /api/learning
+            pathType: Prefix
+            backend: { service: { name: cka-lab-ms-learning, port: { name: http } } }
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: cka-lab-web, port: { name: http } } }

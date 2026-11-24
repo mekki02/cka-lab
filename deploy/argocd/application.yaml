@@ -1,0 +1,41 @@
+# Argo CD Application deploying CKA Lab from this repository's Helm chart.
+# (The "GitOps with Argo CD" module of the course uses this file as its example.)
+#
+# Prerequisites in the target namespace — Argo CD renders Helm with
+# `helm template`, where the chart's `lookup`-based secret generation cannot
+# see existing Secrets, so secrets are created out of band (or with
+# Sealed Secrets / External Secrets):
+#   cka-lab-postgresql, cka-lab-jwt, cka-lab-tls   (see deploy/k8s/secret.example.yaml)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cka-lab
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/your-org/cka-lab.git
+    targetRevision: main
+    path: deploy/helm/cka-lab
+    helm:
+      valuesObject:
+        publicUrl: https://cka.example.com
+        image:
+          registry: ghcr.io/your-org/cka-lab
+          tag: "0.1.0"
+        postgresql:
+          existingSecret: cka-lab-postgresql
+        jwt:
+          existingSecret: cka-lab-jwt
+        ingress:
+          className: traefik
+          host: cka.example.com
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cka-lab
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

@@ -1,0 +1,96 @@
+id: troubleshooting
+title: Troubleshooting
+description: Where to look first for each kind of failure — from Pods to the control plane.
+order: 4
+sections:
+  - title: Workloads
+    entries:
+      - title: Pod will not start
+        code: |
+          kubectl get pod web-xyz -o wide
+          kubectl describe pod web-xyz | sed -n '/Events:/,$p'
+          kubectl logs web-xyz -c app                # current container
+          kubectl logs web-xyz -c app --previous     # the crashed instance
+          kubectl get pod web-xyz -o jsonpath='{.status.containerStatuses[*].state}'
+        tags: [pod, crashloopbackoff, logs]
+      - title: Status → usual cause
+        lang: text
+        code: |
+          Pending                      no node fits: resources, taints, affinity, unbound PVC
+          ImagePullBackOff             wrong image name/tag, private registry without imagePullSecret
+          CrashLoopBackOff             process exits: bad command/args, config, missing dependency
+          CreateContainerConfigError   missing ConfigMap/Secret or key
+          OOMKilled                    memory limit too low (exit code 137)
+          Running but 0/1 Ready        readiness probe failing → no Service traffic
+        tags: [status, pending, oom]
+      - title: Stuck rollout
+        code: |
+          kubectl rollout status deploy/web
+          kubectl describe deploy web | grep -A5 Conditions
+          kubectl get rs -l app=web
+          kubectl get events --field-selector involvedObject.kind=ReplicaSet
+        tags: [rollout, deployment, quota]
+      - title: Debug containers
+        code: |
+          kubectl debug -it web-xyz --image=busybox:1.36 --target=app    # ephemeral container in the Pod
+          kubectl debug node/node-1 -it --image=busybox:1.36             # shell on a node (host fs at /host)
+          kubectl run tmp --rm -it --restart=Never --image=nicolaka/netshoot -- bash
+        tags: [debug, ephemeral]
+  - title: Services and DNS
+    entries:
+      - title: The decision path
+        lang: text
+        code: |
+          1. name resolves?          nslookup <svc>.<ns>  (from a Pod)
+          2. Service right?          kubectl get svc <svc> -o wide   (ports, selector)
+          3. endpoints present?      kubectl get pods -l <selector>  (match + READY)
+          4. Pod answers directly?   curl <podIP>:<targetPort>
+          5. else                    NetworkPolicy, kube-proxy, CNI
+        tags: [service, dns, endpoints]
+      - title: DNS checks
+        code: |
+          kubectl -n kube-system get pods -l k8s-app=kube-dns
+          kubectl -n kube-system logs -l k8s-app=kube-dns --tail=20
+          kubectl -n kube-system get configmap coredns -o yaml
+          kubectl run t --rm -it --restart=Never --image=busybox:1.36 -- nslookup kubernetes.default
+        tags: [dns, coredns]
+  - title: Nodes and control plane
+    entries:
+      - title: NotReady node
+        description: On the node (ssh on the exam; docker exec on kind).
+        code: |
+          kubectl describe node node-1 | sed -n '/Conditions:/,/Addresses:/p'
+          systemctl status kubelet
+          journalctl -u kubelet --since "15 min ago" --no-pager | tail -50
+          systemctl status containerd
+          cat /var/lib/kubelet/config.yaml
+          sudo systemctl restart kubelet
+        tags: [node, kubelet, notready]
+      - title: Broken control plane component
+        code: |
+          ls /etc/kubernetes/manifests/
+          sudo crictl ps -a | grep -E 'apiserver|scheduler|controller|etcd'
+          sudo crictl logs <container-id> 2>&1 | tail -30
+          ls /var/log/pods/ | grep kube-system
+          # no container at all? the manifest may not parse:
+          journalctl -u kubelet --no-pager | grep -i manifest | tail
+        tags: [control-plane, static-pod, crictl]
+      - title: etcd
+        code: |
+          ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 \
+            --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+            --cert=/etc/kubernetes/pki/etcd/server.crt \
+            --key=/etc/kubernetes/pki/etcd/server.key \
+            endpoint health
+          # snapshot / restore
+          etcdctl ... snapshot save /opt/backup/etcd.db
+          etcdutl snapshot restore /opt/backup/etcd.db --data-dir /var/lib/etcd-restored
+          # then point the etcd static Pod's hostPath at /var/lib/etcd-restored
+        tags: [etcd, backup, restore]
+      - title: Resource usage
+        code: |
+          kubectl top nodes
+          kubectl top pods -A --sort-by=cpu
+          kubectl top pod web-xyz --containers
+          kubectl describe node node-1 | sed -n '/Allocated resources/,/Events/p'
+        tags: [top, metrics, resources]

@@ -1,0 +1,28 @@
+# Traefik as the Ingress controller, exposed through fixed node ports.
+#   helm repo add traefik https://traefik.github.io/charts
+#   helm install traefik traefik/traefik -n traefik --create-namespace -f deploy/helm/examples/traefik-values.yaml
+# Tested with traefik/traefik chart 43.x (Traefik v3.8). On a cloud cluster drop the `service` and `ports.*.nodePort` overrides and let
+# it create a LoadBalancer.
+service:
+  spec:
+    type: NodePort
+ports:
+  web:
+    nodePort: 30080
+    # Every plain-HTTP request is redirected to HTTPS (cookies are Secure-only).
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  websecure:
+    nodePort: 30443
+providers:
+  kubernetesIngress:
+    enabled: true
+  kubernetesGateway:
+    enabled: false   # set true to use Gateway API (gateway.enabled in the cka-lab chart)
+ingressClass:
+  enabled: true
+  isDefaultClass: true

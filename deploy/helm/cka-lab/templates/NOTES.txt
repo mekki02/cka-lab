@@ -1,0 +1,18 @@
+CKA Lab {{ .Chart.AppVersion }} is deployed in namespace {{ .Release.Namespace }}.
+
+1. Wait for the Pods:
+   kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }} -w
+
+2. Create the first administrator. This prints a one-time invitation link:
+   kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "cka.fullname" . }}-ms-identity -- \
+     node apps/ms-identity/dist/cli.js create-admin --email you@example.com --name "Your Name"
+
+3. Open {{ .Values.publicUrl }} (the link above points there).
+{{- if not .Values.cookieSecure }}
+
+WARNING: cookieSecure=false — sessions travel over plain HTTP. Only acceptable for local tests.
+{{- end }}
+{{- if and .Values.postgresql.enabled (not .Values.postgresql.existingSecret) }}
+
+Database passwords were generated into Secret {{ include "cka.dbSecretName" . }} (kept on uninstall).
+{{- end }}
