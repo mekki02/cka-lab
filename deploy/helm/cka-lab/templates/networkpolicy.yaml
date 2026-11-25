@@ -4,15 +4,18 @@
 {{- /*
 Least-privilege ingress, written from the database outwards:
 
-  ingress controller ns ──► web :8080, ms-identity :3001, ms-learning :3002
-  ms-learning           ──► ms-identity :3001   (JWKS)
+  ingress controller ns ──► web :8080, ms-identity :3001, ms-learning :3002, ms-labs :3003
+  ms-learning, ms-labs  ──► ms-identity :3001   (JWKS)
   ms-identity, ms-learning ──► postgresql :5432
 
 Everything else to these Pods is dropped. (Egress is left open: the services
-only call each other and the database. Requires a CNI that enforces
-NetworkPolicy — most do; flannel alone does not.)
+only call each other, the database and — ms-labs — the Kubernetes API.
+Requires a CNI that enforces NetworkPolicy — most do; flannel alone does not.)
+Lab session namespaces get their own policies from ms-labs.
 */ -}}
-{{- range $name := list "web" "ms-learning" }}
+{{- $public := list "web" "ms-learning" }}
+{{- if .Values.labs.enabled }}{{ $public = append $public "ms-labs" }}{{ end }}
+{{- range $name := $public }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -43,6 +46,10 @@ spec:
         - namespaceSelector: {{- toYaml $controller | nindent 12 }}
         - podSelector:
             matchLabels: {{- include "cka.selector" (dict "ctx" . "component" "ms-learning") | nindent 14 }}
+        {{- if .Values.labs.enabled }}
+        - podSelector:
+            matchLabels: {{- include "cka.selector" (dict "ctx" . "component" "ms-labs") | nindent 14 }}
+        {{- end }}
       ports: [{ port: http }]
 {{- if .Values.postgresql.enabled }}
 ---

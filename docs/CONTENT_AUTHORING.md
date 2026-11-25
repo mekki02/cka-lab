@@ -182,13 +182,28 @@ tasks:
     description: |               # Markdown
     hints: [ ... ]
     checks:
-      - { id: has-endpoints, description: ..., command: "kubectl ...", expect: "true true" }
+      - { id: has-endpoints, description: ..., command: "kubectl ...", expect: "true true", match: exact }
     solution: |                  # Markdown, revealed on request
 verifyScript: |                  # optional read-only bash, PASS/FAIL per objective
 reset: { description: ..., commands: | ... }
 ```
 
-**Validation rule for publishing a lab:** run it for real — setup, see checks fail, apply the solutions, see every check and the verify script pass, run the reset. Record the Kubernetes version you used in the commit message.
+### Automatic checks (`match`)
+
+In a browser lab environment, checks with `match` run on the student's cluster when they press **Check my work**:
+
+| `match` | Passes when |
+|---|---|
+| `exact` | trimmed stdout equals `expect` (quote YAML values like `"80->8080"`) |
+| `contains` | stdout contains `expect` |
+| `regex` | stdout matches the regular expression `expect` — do not anchor with `^`/`$` if the command may print extra lines (`kubectl run -i` prints a `pod deleted` line, agnhost prints no newline) |
+| `success` | the command exits 0; `expect` describes what that proves |
+
+Rules: checks must be **read-only** and finish in 30 s; they run with admin rights *on the student's virtual cluster*, never on the platform. Leave `match` out when the command needs a value the student must fill in (`<node-ip>`; the checker rejects such auto checks) or the output needs judgement — the UI then shows "check yourself". `setup.commands` run with `set -e` in the environment before the student arrives, and `verifyScript` is run by **Run verify** (lines starting with `PASS`/`FAIL` are shown).
+
+Labs with `environment.destructive: true` (node, kubelet, etcd, kubeadm work) cannot run in a virtual cluster; keep them for the student's own cluster.
+
+**Validation rule for publishing a lab:** run it for real — setup, see checks fail, apply the solutions, see every check and the verify script pass, run the reset. Do it in a browser lab environment too: start the lab, run **Check my work** before and after solving, then **Run verify**. Record the Kubernetes version you used in the commit message.
 
 YAML gotchas: quote any value containing `: ` or starting with a special character (`'…'`); prefer `|` blocks for Markdown.
 

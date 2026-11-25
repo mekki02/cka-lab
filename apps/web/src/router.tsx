@@ -2,6 +2,7 @@ import { Button } from '@mui/material';
 import { createBrowserRouter, Link as RouterLink } from 'react-router-dom';
 import { RequireAuth, RequireRole } from '@/auth/guards';
 import { EmptyState } from '@/components/states';
+import { LABS_ENABLED } from '@/config';
 import { AccountPage } from '@/pages/AccountPage';
 import { AdminUsersPage } from '@/pages/admin/AdminUsersPage';
 import { LoginPage } from '@/pages/auth/LoginPage';
@@ -13,6 +14,7 @@ import { ExamAttemptPage } from '@/pages/exams/ExamAttemptPage';
 import { ExamsPage } from '@/pages/exams/ExamsPage';
 import { LabPage } from '@/pages/labs/LabPage';
 import { LabsPage } from '@/pages/labs/LabsPage';
+import { PlaygroundPage } from '@/pages/labs/PlaygroundPage';
 import { CoursePage } from '@/pages/learn/CoursePage';
 import { LessonPage } from '@/pages/learn/LessonPage';
 import { ModulePage } from '@/pages/learn/ModulePage';
@@ -40,6 +42,7 @@ export const router = createBrowserRouter([
       { path: 'learn/:moduleId/:lessonId', element: <LessonPage /> },
       { path: 'labs', element: <LabsPage /> },
       { path: 'labs/:labId', element: <LabPage /> },
+      ...(LABS_ENABLED ? [{ path: 'playground', element: <PlaygroundPage /> }] : []),
       { path: 'quizzes', element: <QuizzesPage /> },
       { path: 'quizzes/:quizId', element: <QuizPage /> },
       { path: 'exams', element: <ExamsPage /> },

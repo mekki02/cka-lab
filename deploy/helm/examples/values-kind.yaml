@@ -20,3 +20,8 @@ learning:
   replicas: 2
 web:
   replicas: 2
+# Browser terminals with a per-student virtual cluster. Load the toolbox image
+# too:  kind load docker-image cka-lab/toolbox:dev cka-lab/ms-labs:dev --name cka-platform
+labs:
+  enabled: true
+  maxSessions: 4

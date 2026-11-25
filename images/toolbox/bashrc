@@ -1,0 +1,20 @@
+# Shell setup for lab terminals: the same shortcuts the CKA exam environment has.
+[ -f /usr/share/bash-completion/bash_completion ] && . /usr/share/bash-completion/bash_completion
+
+alias k=kubectl
+complete -o default -F __start_kubectl k
+
+# `k create deploy x --image=nginx $do > x.yaml`
+export do="--dry-run=client -o yaml"
+# `k delete pod x $now`
+export now="--force --grace-period=0"
+
+export HISTFILE="$HOME/.bash_history"
+export HISTSIZE=5000
+export HISTCONTROL=ignoredups
+shopt -s histappend
+PROMPT_COMMAND='history -a'
+
+PS1='\[\e[1;36m\]student@cka\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]\$ '
+
+alias ll='ls -lah'

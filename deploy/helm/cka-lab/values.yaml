@@ -44,6 +44,37 @@ learning:
     limits: { memory: 384Mi }
   extraEnv: {}
 
+# Hands-on environments: every student gets a private virtual cluster
+# (vcluster) and a browser terminal. Needs images ms-labs and toolbox, and a
+# cluster with spare capacity: each running session requests ~0.16 CPU and
+# ~0.4 GiB and may use up to labs.quota. See docs/LAB_ARCHITECTURE.md.
+labs:
+  enabled: false
+  # -- Keep 1 unless you need more: provisioning state is per replica.
+  replicas: 1
+  # -- Running sessions allowed at once (all students).
+  maxSessions: 10
+  # -- Sessions without terminal input or checks for this long are deleted.
+  idleMinutes: 60
+  # -- Hard lifetime of a session.
+  maxMinutes: 240
+  # -- Session namespaces are named <prefix><hash>-<random>.
+  namespacePrefix: lab-
+  # -- Per-session ResourceQuota (the virtual cluster itself counts too).
+  quota:
+    requestsCpu: "2"
+    requestsMemory: 3Gi
+    limitsMemory: 6Gi
+    pods: 50
+  # -- Isolate sessions from each other and from the platform. Requires a CNI that enforces NetworkPolicy.
+  networkPolicies: true
+  # -- Host API server CIDRs the virtual clusters must reach. Empty = detected automatically.
+  apiServerCidrs: []
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 512Mi }
+  extraEnv: {}
+
 web:
   replicas: 2
   resources:

@@ -23,7 +23,8 @@ import FlagOutlinedIcon from '@mui/icons-material/FlagOutlined';
 import { isValidElement, useState, type ReactNode } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import type { MDXComponents } from 'mdx/types';
-import { codeFrameSx, CodeTitle, CopyButton } from '@/components/CodeBlock';
+import { codeFrameSx, CodeTitle, CopyButton, RunInTerminalButton } from '@/components/CodeBlock';
+import { useTerminalBridge } from '@/labs/terminalBridge';
 import { anchorOf } from './anchor';
 import { Diagram } from './Diagram';
 
@@ -49,10 +50,12 @@ const SCROLL_MARGIN = { scrollMarginTop: '88px' };
 const Pre = (props: Children & { 'data-title'?: string; className?: string; style?: object; tabIndex?: number }) => {
   const dark = useTheme().palette.mode === 'dark';
   const { children, 'data-title': title, className } = props;
+  const runnable = useTerminalBridge() !== null && /language-(bash|shell)/.test(className ?? '');
   return (
-    <Box sx={codeFrameSx(dark)}>
+    <Box sx={codeFrameSx(dark, runnable)}>
       {title && <CodeTitle>{title}</CodeTitle>}
       <CopyButton text={textOf(children).replace(/\n$/, '')} />
+      {runnable && <RunInTerminalButton text={textOf(children).replace(/\n$/, '')} />}
       <pre className={className} tabIndex={0}>
         {children}
       </pre>
@@ -85,9 +88,10 @@ const Terminal = ({
 }: Children & { command: string; output?: string; prompt?: string; title?: string }) => {
   const dark = useTheme().palette.mode === 'dark';
   const cmd = command.trim();
+  const runnable = useTerminalBridge() !== null;
   const output = outputProp ?? (children ? textOf(children) : undefined);
   return (
-    <Box sx={{ ...codeFrameSx(dark), bgcolor: dark ? '#0a0e14' : '#0f172a', color: '#e2e8f0' }}>
+    <Box sx={{ ...codeFrameSx(dark, runnable), bgcolor: dark ? '#0a0e14' : '#0f172a', color: '#e2e8f0' }}>
       <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 2, py: 0.75, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
         <TerminalIcon sx={{ fontSize: 16, color: '#94a3b8' }} />
         <Typography variant="caption" sx={{ color: '#94a3b8', fontFamily: 'monospace' }}>
@@ -95,6 +99,7 @@ const Terminal = ({
         </Typography>
       </Stack>
       <CopyButton text={cmd} />
+      {runnable && <RunInTerminalButton text={cmd} />}
       <pre>
         <code>
           {cmd.split('\n').map((line, i) => (

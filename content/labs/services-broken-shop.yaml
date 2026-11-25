@@ -88,10 +88,12 @@ tasks:
         description: The Service has two ready endpoints
         command: kubectl -n shop get endpointslices -l kubernetes.io/service-name=catalog -o jsonpath='{.items[*].endpoints[*].conditions.ready}'
         expect: "true true"
+        match: exact
       - id: answers
         description: The API answers through the Service
         command: kubectl -n shop run t --rm -i --restart=Never --image=busybox:1.36 -- wget -qO- -T 3 catalog/hostname
-        expect: The name of a catalog Pod, e.g. catalog-5f7c9d8b6-x2kqp
+        expect: "catalog-[a-z0-9]+-[a-z0-9]+"
+        match: regex
     solution: |
       The Service selects `tier: backend` but the Pods are labelled `tier: api`. Fix the Service selector:
 
@@ -116,6 +118,7 @@ tasks:
         description: Both frontend Pods are Ready
         command: kubectl -n shop get deploy frontend -o jsonpath='{.status.readyReplicas}'
         expect: "2"
+        match: exact
     solution: |
       The readiness probe checks port `8080`, but nginx listens on `80`. Events show
       `Readiness probe failed: Get "http://10.244.x.y:8080/": dial tcp ... connect: connection refused`.
@@ -136,6 +139,7 @@ tasks:
         description: The nginx welcome page is served through the Service
         command: kubectl -n monitoring exec probe -- wget -qO- -T 3 frontend.shop | grep -o '<title>.*</title>'
         expect: <title>Welcome to nginx!</title>
+        match: contains
     solution: |
       The `frontend` Service was correct (`port: 80` → `targetPort: 80`). Once the Pods became Ready, it had
       endpoints and works. Verifying a fix from a *different* namespace also proves DNS and the absence of
@@ -153,7 +157,8 @@ tasks:
       - id: cross-ns
         description: The monitoring probe reaches catalog
         command: kubectl -n monitoring exec probe -- wget -qO- -T 3 catalog.shop/hostname
-        expect: The name of a catalog Pod, e.g. catalog-78c89f7866-jmpnz
+        expect: "catalog-[a-z0-9]+-[a-z0-9]+"
+        match: regex
     solution: |
       DNS works. A bare name is resolved in the client's own namespace (`catalog.monitoring.svc.cluster.local`),
       where no such Service exists. Cross-namespace callers must use `catalog.shop` or the FQDN

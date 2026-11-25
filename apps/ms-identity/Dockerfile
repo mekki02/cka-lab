@@ -16,6 +16,7 @@ COPY packages/service-kit/package.json packages/service-kit/
 COPY packages/auth-kit/package.json packages/auth-kit/
 COPY apps/ms-identity/package.json apps/ms-identity/
 COPY apps/ms-learning/package.json apps/ms-learning/
+COPY apps/ms-labs/package.json apps/ms-labs/
 COPY apps/web/package.json apps/web/
 RUN --mount=type=cache,target=/root/.npm \
     npm ci -w @cka/contracts -w @cka/service-kit -w @cka/auth-kit -w @cka/ms-identity --include-workspace-root
@@ -35,6 +36,7 @@ COPY --from=build /repo/packages/service-kit/package.json packages/service-kit/
 COPY --from=build /repo/packages/auth-kit/package.json packages/auth-kit/
 COPY --from=build /repo/apps/ms-identity/package.json apps/ms-identity/
 COPY apps/ms-learning/package.json apps/ms-learning/
+COPY apps/ms-labs/package.json apps/ms-labs/
 COPY apps/web/package.json apps/web/
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --omit=dev -w @cka/contracts -w @cka/service-kit -w @cka/auth-kit -w @cka/ms-identity

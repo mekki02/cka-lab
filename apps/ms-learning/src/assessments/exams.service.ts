@@ -47,7 +47,7 @@ export class ExamsService {
         points: t.points,
         context: t.context,
         description: t.description,
-        checks: t.checks,
+        checks: t.checks.map(c => ({ ...c, match: c.match ?? null })),
         solution: done ? t.solution : null,
       })),
       taskStates: a.taskStates,

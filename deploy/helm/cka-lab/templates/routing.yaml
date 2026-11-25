@@ -32,6 +32,12 @@ spec:
           - path: /api/learning
             pathType: Prefix
             backend: { service: { name: {{ $fullname }}-ms-learning, port: { name: http } } }
+          {{- if .Values.labs.enabled }}
+          # REST and the terminal WebSocket (Ingress controllers pass upgrades through).
+          - path: /api/labs
+            pathType: Prefix
+            backend: { service: { name: {{ $fullname }}-ms-labs, port: { name: http } } }
+          {{- end }}
           - path: /
             pathType: Prefix
             backend: { service: { name: {{ $fullname }}-web, port: { name: http } } }
@@ -53,6 +59,10 @@ spec:
       backendRefs: [{ name: {{ $fullname }}-ms-identity, port: 3001 }]
     - matches: [{ path: { type: PathPrefix, value: /api/learning } }]
       backendRefs: [{ name: {{ $fullname }}-ms-learning, port: 3002 }]
+    {{- if .Values.labs.enabled }}
+    - matches: [{ path: { type: PathPrefix, value: /api/labs } }]
+      backendRefs: [{ name: {{ $fullname }}-ms-labs, port: 3003 }]
+    {{- end }}
     - matches: [{ path: { type: PathPrefix, value: / } }]
       backendRefs: [{ name: {{ $fullname }}-web, port: 8080 }]
 {{- end }}

@@ -13,7 +13,7 @@ Three ways to run CKA Lab, from simplest to most production-like. All of them we
 
 ## 1. Build and publish images
 
-The three images build from the repository root (the services need the shared packages):
+The images build from the repository root (the services need the shared packages):
 
 ```bash
 REG=ghcr.io/your-org/cka-lab   # any OCI registry
@@ -22,8 +22,12 @@ TAG=0.1.0
 docker build -f apps/ms-identity/Dockerfile -t $REG/ms-identity:$TAG .
 docker build -f apps/ms-learning/Dockerfile -t $REG/ms-learning:$TAG .
 docker build -f apps/web/Dockerfile         -t $REG/web:$TAG .
+# Only for browser lab environments (labs.enabled):
+docker build -f apps/ms-labs/Dockerfile     -t $REG/ms-labs:$TAG .
+docker build -t $REG/toolbox:$TAG images/toolbox
 
 docker push $REG/ms-identity:$TAG && docker push $REG/ms-learning:$TAG && docker push $REG/web:$TAG
+docker push $REG/ms-labs:$TAG && docker push $REG/toolbox:$TAG
 ```
 
 Or with Compose: `IMAGE_PREFIX=$REG IMAGE_TAG=$TAG docker compose build && IMAGE_PREFIX=$REG IMAGE_TAG=$TAG docker compose push ms-identity ms-learning web`.
@@ -170,7 +174,9 @@ Also allow the services' egress to the database if you restrict egress.
 ```bash
 kind create cluster --name cka-platform --config deploy/kind/platform-cluster.yaml
 docker compose build
-kind load docker-image cka-lab/ms-identity:dev cka-lab/ms-learning:dev cka-lab/web:dev --name cka-platform
+docker build -f apps/ms-labs/Dockerfile -t cka-lab/ms-labs:dev . && docker build -t cka-lab/toolbox:dev images/toolbox
+kind load docker-image cka-lab/ms-identity:dev cka-lab/ms-learning:dev cka-lab/web:dev \
+  cka-lab/ms-labs:dev cka-lab/toolbox:dev --name cka-platform
 helm install traefik traefik/traefik -n traefik --create-namespace -f deploy/helm/examples/traefik-values.yaml
 kubectl create namespace cka-lab
 openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=cka.localhost" \
@@ -189,6 +195,11 @@ Verified on that setup:
 - progress survives deleting the PostgreSQL Pod;
 - NetworkPolicies block a Pod in another namespace from reaching PostgreSQL and the services;
 - **0 failed requests out of 2,651** while all three Deployments were restarted (`kubectl rollout restart`).
+- lab environments (`labs.enabled: true` in values-kind.yaml): a session is Ready in 26–45 s; both labs solved through the browser terminal with every automatic check and verify script passing; the admission policies refuse every out-of-scope request by ms-labs (see LAB_ARCHITECTURE).
+
+### Lab environments: sizing
+
+Each running session requests about 0.16 CPU and 0.4 GiB (virtual cluster 100m/256Mi, CoreDNS 20m/64Mi, toolbox 40m/96Mi; the virtual cluster may burst to 1.5 GiB), plus what the student runs, capped by `labs.quota`. Set `labs.maxSessions` to what your nodes can hold. Images pulled per node on first use: `ghcr.io/loft-sh/vcluster-pro:0.37.7`, `ghcr.io/loft-sh/kubernetes:v1.36.6`, `coredns/coredns:1.14.2` and the toolbox — pre-pull them for faster first starts.
 
 ---
 

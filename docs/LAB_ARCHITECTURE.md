@@ -1,117 +1,87 @@
 # Lab architecture
 
-## Today: student-run labs (implemented)
+Every student gets a **private Kubernetes cluster in the browser**: start a lab, and within about a minute a terminal opens next to the instructions, the lab's broken (or empty) starting state is already applied, and **Check my work** verifies each task on the cluster itself. There is also a **Playground** (an empty cluster, from the sidebar or the terminal button on any page) to try lesson commands.
 
-Labs run **in the student's own terminal** against **their own cluster** (the course uses kind: `deploy/kind/cka-cluster.yaml`). The platform provides everything around the commands but executes nothing:
+Students can still do every lab on their own cluster instead: each lab page keeps the copy-paste setup, the checks, the verify script and the reset.
 
-| Lab element | Where it lives | Notes |
-|---|---|---|
-| Scenario, objectives, environment requirements | `content/labs/<id>.yaml` | `destructive: true` labs show a warning to use a disposable cluster |
-| Setup commands | same | Copy-paste, idempotent where possible |
-| Tasks with hints | same | Hints are always visible on demand |
-| Checks (`command` + `expect`) | same | Read-only commands the student runs to verify a task |
-| Solutions | same, served only on request | Revealing is recorded (`lab_progress.revealed_solutions`); challenge and troubleshooting labs ask for confirmation |
-| Verify script | same | Read-only bash that prints PASS/FAIL per objective |
-| Reset | same | Removes everything the lab created |
-| Progress | `ms-learning` database | Task completion is **self-reported** and labelled as such in the UI |
-
-Every published lab was executed end to end on a kind v1.37 cluster (setup → failing verify → documented solution → passing verify → reset) before publication. This process caught real bugs in early drafts (an endpoint returning an empty body that a check expected to contain text). Keep doing it for every new lab.
-
-What the platform deliberately does **not** claim: that a task "passed". It shows what the student reported.
-
-## Future: platform-run labs (designed, not implemented)
-
-The goal: start a lab in the browser, get an isolated environment, have tasks **validated automatically**, reset with one click — without giving the learning platform dangerous access to any cluster.
-
-### Principles
-
-1. **The learning services never get Kubernetes credentials.** Not cluster-admin, not namespaced — none. They only call the lab controller's narrow API.
-2. **Browsers never receive kubeconfigs** for anything except the student's own disposable environment, and even that only through a terminal proxy, not a downloadable credential.
-3. **No arbitrary command execution on shared infrastructure.** Validation runs predefined, read-only checks written in content, not commands supplied at run time.
-4. **Blast radius matches the exercise.** Namespaced exercises get a namespace; cluster-level exercises (etcd restore, kubelet breakage, upgrades) get a disposable cluster.
-
-### Components
+## How it works
 
 ```mermaid
 flowchart LR
-  W[web] -->|start lab, run checks| LE[ms-learning]
-  LE -->|"mTLS/JWT, narrow API: create/reset/delete session, run check id"| LC[ms-labs<br/>lab controller]
-  LC -->|scoped kubeconfig| LAB[(dedicated lab cluster)]
-  LC -->|vcluster / kind / VM API| DIS[(disposable clusters)]
-  W -->|"WebSocket terminal (session-bound)"| TP[terminal proxy]
-  TP -->|exec into toolbox Pod| LAB
+  B[browser<br/>xterm.js] -- "REST /api/labs/*" --> L[ms-labs]
+  B -- "WebSocket /api/labs/session/terminal" --> L
+  L -- "JWKS (verify cookie)" --> I[ms-identity]
+  L -- "namespaces, helm, exec<br/>(scoped ServiceAccount)" --> K[(Kubernetes API)]
+  subgraph S["namespace lab-&lt;user&gt;-&lt;random&gt; (one per student)"]
+    VC[vcluster<br/>API server + syncer]
+    T[toolbox Pod<br/>shell · checker]
+    P[student Pods<br/>synced from the vcluster]
+  end
+  K --- S
+  T -- "kubeconfig of the vcluster" --> VC
 ```
 
-| Component | Responsibility | Credentials |
-|---|---|---|
-| `ms-labs` (lab controller) | Owns lab sessions: create, expire, reset, delete; runs **predefined** checks | ServiceAccount on the **lab cluster** only, with a ClusterRole limited to: create/delete namespaces with a `cka-lab/session` label, and manage resources inside those namespaces. Separate credentials per disposable cluster. |
-| Lab cluster | Hosts namespace-scoped sessions | Not the cluster that runs the platform |
-| Disposable clusters | One per destructive session (vcluster for API-level isolation, kind or VMs for node-level tasks) | Created and destroyed by the controller |
-| Toolbox Pod | Per session: kubectl, etcdctl, a shell; bound to a session ServiceAccount | RoleBinding only in the session namespace (or admin of its disposable cluster) |
-| Terminal proxy | Bridges the browser to the toolbox Pod over WebSocket after checking the user's session and lab ownership | Exec permission on toolbox Pods only |
+| Piece | What it is |
+|---|---|
+| **ms-labs** (`apps/ms-labs`) | NestJS service. The only platform component with Kubernetes credentials. Creates and deletes sessions, runs lab setup and checks, bridges the terminal WebSocket to `kubectl exec`. Stateless: the session state lives on the namespace. |
+| **Session** | One namespace per student (`lab-<hash of user id>-<random>`). Labels mark it as a session and record the owner; annotations hold the phase, lab, timestamps and check results. Deleting the namespace deletes everything. |
+| **Virtual cluster** | [vcluster](https://www.vcluster.com) 0.37 (chart pinned and vendored in the ms-labs image): a real Kubernetes API server (v1.36) running as one Pod in the session namespace. The student is cluster-admin *of it*: namespaces, ClusterRoles, CRDs, PVs, nodes (virtual) — what CKA tasks need — without any rights on the real cluster. Pods they create are synced into the session namespace and run on the real nodes. |
+| **Toolbox Pod** (`images/toolbox`) | Two containers from one image (bash, kubectl 1.36, helm, vim, jq, yq, curl, dig, `k` alias, `$do` and `$now` like in the exam). `shell` is the browser terminal. `checker` runs setup and checks; it has its own filesystem, so the student cannot tamper with what grades them. Both only hold the vcluster's kubeconfig. |
+| **web** | Lab page = instructions left, terminal right. `▶` on code blocks pastes the command into the terminal. A terminal dock (top bar) opens the playground beside any page. Enabled with `LABS_ENABLED=true` (`labs.enabled` in Helm). |
 
 ### Session lifecycle
 
-1. Student clicks **Start lab**. `ms-learning` asks `ms-labs` for a session for `(user, lab)`.
-2. `ms-labs` creates namespace `lab-<session-id>` with:
-   - `ResourceQuota` (CPU, memory, Pods, Services, PVCs),
-   - `LimitRange` (default requests/limits),
-   - default-deny `NetworkPolicy` plus allow rules the lab declares,
-   - Pod Security admission label `restricted` (or `baseline` if the lab needs it),
-   - a session ServiceAccount + RoleBinding scoped to the namespace,
-   - the lab's **setup** manifests (content gains a declarative `setup.manifests` field next to the shell commands).
-3. The student works in the browser terminal (or downloads nothing — the toolbox is in-cluster).
-4. **Check** buttons call `ms-labs` with a check id. The controller runs the check defined in content (initially: kubectl queries with JSONPath + expected values, evaluated by the controller, no shell) and returns pass/fail. `ms-learning` stores verified results — now the UI can honestly say *verified*.
-5. **Reset** deletes and recreates the namespace. **Expiry** (e.g. 2 h idle, 4 h max) deletes it automatically; a TTL controller sweeps orphans.
+1. **Start** (`POST /api/labs/session {labId}`). One session per student: starting another lab deletes the previous one (its namespace terminates in the background). A global cap (`LABS_MAX_SESSIONS`) protects the cluster.
+2. **Provisioning**: namespace → RoleBinding for ms-labs → ResourceQuota, LimitRange, NetworkPolicy → `helm upgrade --install` of the vcluster.
+3. **Starting**: wait for the vcluster kubeconfig Secret, create the toolbox Pod, wait until the virtual API answers.
+4. **SettingUp**: run the lab's `setup.commands` in `checker` (5 min timeout).
+5. **Ready**: the browser opens the terminal. Typical total: 30–45 s with images cached.
+6. **Checks**: `POST /session/tasks/:taskId/checks` runs the task's automatic checks in `checker` (30 s each) and stores the results on the namespace; `POST /session/verify` runs the lab's verify script.
+7. **Reset** = delete the session and create a fresh one (the setup runs again). **End** deletes it.
+8. **Expiry**: a sweeper in ms-labs (every minute) deletes sessions idle for `LABS_IDLE_MINUTES` (no terminal input or checks), older than `LABS_MAX_MINUTES`, or stuck before Ready for `LABS_PROVISION_TIMEOUT_MINUTES` — e.g. because the ms-labs replica provisioning them restarted.
 
-### Destructive labs
+### Checks
 
-Anything touching nodes or the control plane gets its own cluster:
+A check is a read-only command and its expected output (see [CONTENT_AUTHORING](CONTENT_AUTHORING.md#labs-contentlabsidyaml)). With `match` set, ms-labs runs it and decides:
 
-- **vcluster** for exercises on API-level control plane behaviour (it has its own API server and etcd/SQLite),
-- **kind in a VM** or real VMs for kubelet, container runtime, kubeadm upgrades and etcd restore — these need node access that a namespace can never provide.
+| `match` | Passes when |
+|---|---|
+| `exact` | trimmed stdout equals `expect` |
+| `contains` | stdout contains `expect` |
+| `regex` | stdout matches the regular expression `expect` |
+| `success` | the command exits 0 |
 
-Disposable clusters are created from a pre-baked image to keep start times under a minute, and destroyed on reset or expiry.
+Only commands written in the course content run — never text from a request. Checks without `match` (e.g. ones with placeholders like `<node-ip>`) stay "check yourself".
 
-### Validation design
+## Security
 
-Checks become structured instead of free-form:
-
-```yaml
-checks:
-  - id: has-endpoints
-    description: The Service has two ready endpoints
-    query:
-      apiVersion: discovery.k8s.io/v1
-      kind: EndpointSlice
-      namespace: "{session}"
-      labelSelector: kubernetes.io/service-name=catalog
-      jsonPath: "{.items[*].endpoints[?(@.conditions.ready==true)].addresses[0]}"
-    expect:
-      count: 2
-```
-
-The controller evaluates them with its own client — no shell, no user input in commands. Checks that need traffic (an HTTP request through a Service) run as short-lived Jobs from a fixed probe image inside the session namespace.
-
-### Security controls summary
+The design goal: **a student — or a bug in ms-labs — cannot affect anything outside their own session namespace.**
 
 | Risk | Control |
 |---|---|
-| Platform compromise → cluster compromise | Platform services hold no Kubernetes credentials; only `ms-labs` does, and only for lab clusters |
-| Escaping a session namespace | Namespace RBAC, Pod Security restricted, NetworkPolicies, quotas; no hostPath/privileged in namespace labs |
-| Resource exhaustion | ResourceQuota/LimitRange per session, cap on concurrent sessions per user and globally |
-| Abandoned environments | Expiry + sweeper |
-| Terminal hijacking | Terminal proxy validates the platform session and lab ownership on connect; sessions bound to one toolbox Pod |
-| Credential leakage to browsers | Browser never receives a kubeconfig; the terminal is a proxied stream |
+| Platform compromise → cluster compromise | Only ms-labs has Kubernetes credentials. Its ClusterRole allows only: namespaces (create/patch/delete…), `create` RoleBindings, `bind` one ClusterRole (`session-owner`). It has **no** rights inside any namespace until it creates a session and binds `session-owner` *in that namespace*. Verified: it cannot read Secrets in the platform namespace or kube-system, nor exec into platform Pods. |
+| A bug or injection in ms-labs | Two **ValidatingAdmissionPolicies** (`templates/labs.yaml`), matching only ms-labs' ServiceAccount: namespaces it creates/changes/deletes must be named `lab-*` and labelled `cka-lab/session=true` (it cannot label an existing namespace into scope, or remove the label); RoleBindings only inside session namespaces, and only to namespace Roles or `session-owner`. Tested by impersonation: creating `sneaky`, labelling `cka-lab`, deleting `traefik`, binding in `kube-system`, binding `cluster-admin` — all denied. |
+| Student escapes to the real cluster | The student's API is the vcluster's, not the host's. The toolbox has no ServiceAccount token. The vcluster chart is installed without its ClusterRole (`rbac.clusterRole.enabled=false`). Session namespaces enforce Pod Security **baseline** (no privileged Pods, hostPath or host namespaces). |
+| Student reaches other students or the platform over the network | Per-session NetworkPolicy: ingress only from the same namespace; egress to the same namespace, cluster DNS, the API server endpoint (for the syncer) and the internet — but not private ranges or cloud metadata (`169.254.0.0/16`). Verified from the shell and from a Pod inside the vcluster: platform services and Postgres unreachable by name and IP. Needs a CNI that enforces NetworkPolicy (kindnet does since kind 0.24). |
+| Resource exhaustion | ResourceQuota per session (CPU/memory/Pods/Services/PVCs, no LoadBalancers), LimitRange defaults, global session cap, idle and hard expiry. |
+| Terminal hijacking | The WebSocket handshake requires the access-token cookie (verified with ms-identity's public keys) **and** an `Origin` equal to `PUBLIC_URL` (browsers do not apply CORS to WebSockets; this is the CSRF defence). The target Pod is looked up from the token's user id — the request carries no session id. Max 4 terminals per user. Frames are validated (`input` / `resize` only, 64 KiB max). |
+| Grading tampering | Checks run in the `checker` container (separate filesystem); results are stored server-side on the namespace. |
 
-### Migration path
+### Known limitations
 
-1. Add structured `query` checks alongside today's `command` checks in content (both shown to students).
-2. Build `ms-labs` with namespace sessions only; enable for non-destructive labs.
-3. Add the terminal proxy and toolbox image.
-4. Add disposable clusters for destructive labs.
-5. Mark labs as "auto-validated" in the UI only once their checks run server-side.
+- **Node-level tasks** (kubeadm install/upgrade, etcd backup/restore, kubelet troubleshooting, static Pods) need real nodes; a virtual cluster has none. Labs with `environment.destructive: true` still run on the student's own cluster. Next step: disposable VMs (or kind-in-a-VM / KubeVirt) per session behind the same API.
+- **NodePorts** are allocated on the real cluster: two students choosing the same fixed `nodePort` conflict.
+- `kubectl run -i` / `attach` fall back to streaming logs inside a vcluster (output still appears).
+- The vcluster runs Kubernetes 1.36 while the course targets 1.37 — update the chart when vcluster ships 1.37.
+- Sessions run on the same cluster as the platform by default. For anything beyond a small private installation, run labs on a dedicated cluster (ms-labs only needs a kubeconfig: `LABS_KUBE_CONTEXT`, or mount one), so a noisy lab cannot starve the platform.
+- The provisioning steps run in the ms-labs replica that received the request; keep `labs.replicas: 1` unless you add leader election.
+
+## Running it
+
+- **Kubernetes**: `labs.enabled: true` in Helm values, plus the `ms-labs` and `toolbox` images ([DEPLOYMENT](DEPLOYMENT.md)).
+- **Development**: run ms-labs on your machine against a kind cluster ([DEVELOPMENT](DEVELOPMENT.md#hands-on-environments-ms-labs)).
+- **Docker Compose**: not supported — sessions need a Kubernetes cluster.
 
 ## Ideas to practise on later
 
-These are not needed by the platform, but each is a good next DevOps exercise using it as the subject: a Redis-backed shared rate limiter; NATS events (e.g. "user deactivated" → learning data anonymisation); OpenTelemetry traces across web → identity → learning; a CloudNativePG cluster instead of the bundled PostgreSQL; image signing with cosign and admission verification.
+Not needed by the platform, but each is a good next DevOps exercise using it as the subject: a Redis-backed shared rate limiter; NATS events (e.g. "user deactivated" → learning data anonymisation, end lab sessions); OpenTelemetry traces across web → identity → learning → labs; a CloudNativePG cluster instead of the bundled PostgreSQL; image signing with cosign and admission verification; leader election for ms-labs.

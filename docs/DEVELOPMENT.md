@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Node.js ≥ 22.12 (24 LTS recommended; `.nvmrc` says 24) and npm ≥ 10
+- Node.js ≥ 22.15 (24 LTS recommended; `.nvmrc` says 24) and npm ≥ 10 — ms-labs' Kubernetes client (undici) needs zlib zstd support; Node 23.6 crashes on start
 - Docker with Compose v2 (for PostgreSQL, or the whole stack)
 - Optional: `kind`, `kubectl`, `helm` for labs and Kubernetes testing
 
@@ -43,6 +43,21 @@ PUBLIC_URL=http://localhost:5173 node apps/ms-identity/dist/cli.js create-admin 
 ```
 
 > The shared packages (`packages/*`) are compiled to `dist/` and consumed by the services through workspace links. After changing one, run `npm run build:packages` (the services' watch mode does not rebuild them). The web app imports `@cka/contracts` from source, so it needs no rebuild.
+
+### Hands-on environments (ms-labs)
+
+ms-labs needs a Kubernetes cluster to create sessions on. Any kind cluster works; it uses your kubeconfig context directly:
+
+```bash
+docker build -t cka-lab/toolbox:dev images/toolbox
+kind load docker-image cka-lab/toolbox:dev --name cka-platform
+
+# terminal 4 — labs on :3003 (Vite proxies /api/labs, including the WebSocket)
+LABS_KUBE_CONTEXT=kind-cka-platform CONTENT_DIR=$PWD/content PUBLIC_URL=http://localhost:5173 \
+JWKS_URL=http://localhost:3001/.well-known/jwks.json npm run dev:labs
+```
+
+In this mode ms-labs acts with your kubeconfig user (usually cluster-admin), so RBAC and the admission policies are only exercised in the Helm deployment — test changes to them there. Clean up stray sessions with `kubectl delete ns -l cka-lab/session=true`.
 
 ### Or run the whole stack in containers
 

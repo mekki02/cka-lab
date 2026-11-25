@@ -19,5 +19,5 @@ declare module '*.mdx' {
 }
 
 interface Window {
-  __APP_CONFIG__?: { APP_NAME?: string };
+  __APP_CONFIG__?: { APP_NAME?: string; LABS_ENABLED?: string };
 }

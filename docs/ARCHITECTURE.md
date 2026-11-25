@@ -9,8 +9,11 @@ flowchart LR
   B[Browser] -- HTTPS --> I[Ingress / Gateway<br/>TLS termination]
   I -- "/api/identity/*" --> ID[ms-identity<br/>NestJS]
   I -- "/api/learning/*" --> LE[ms-learning<br/>NestJS]
+  I -. "/api/labs/* + terminal WebSocket (optional)" .-> LB[ms-labs<br/>NestJS]
   I -- "/*" --> W[web<br/>nginx + React SPA]
   LE -- "JWKS (public keys)" --> ID
+  LB -. JWKS .-> ID
+  LB -. "scoped ServiceAccount" .-> K[(Kubernetes API<br/>per-student vclusters)]
   ID --> PG[(PostgreSQL<br/>db: identity)]
   LE --> PG2[(PostgreSQL<br/>db: learning)]
 ```
@@ -20,6 +23,7 @@ flowchart LR
 | `web` | The UI. Lesson bodies are compiled into it. | React 19, MUI 7, RTK Query, React Router 7, MDX, Shiki, Mermaid; served by unprivileged nginx | none |
 | `ms-identity` | Users, roles, invitations, password reset, sessions, **the only holder of the token-signing key** | NestJS 12, TypeORM, argon2, jose | `identity` database |
 | `ms-learning` | Curriculum, progress, bookmarks, labs, quizzes (graded here), mock exams, dashboard | NestJS 12, TypeORM, zod, yaml | `learning` database + content baked into the image |
+| `ms-labs` (optional) | Browser lab environments: a namespace + virtual cluster + toolbox Pod per student, the terminal WebSocket, server-side checks. See [LAB_ARCHITECTURE](LAB_ARCHITECTURE.md) | NestJS 12, @kubernetes/client-node, ws, helm + vcluster chart | none — session state is stored on the session namespace |
 | PostgreSQL | Persistence. One server, **one database and one login role per service**. | PostgreSQL 17 | PVC / volume |
 
 There is no API gateway service: path-based routing is the Ingress' job (and the Compose "edge" nginx in local runs). Both are configured with the same three rules.

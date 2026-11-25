@@ -20,5 +20,6 @@ add_entry() {
 }
 
 [ -n "${APP_NAME:-}" ] && add_entry APP_NAME "${APP_NAME}"
+[ -n "${LABS_ENABLED:-}" ] && add_entry LABS_ENABLED "${LABS_ENABLED}"
 
 printf 'window.__APP_CONFIG__ = { %s };\n' "${ENTRIES}" > "${CONFIG_PATH}"

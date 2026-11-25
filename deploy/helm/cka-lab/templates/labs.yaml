@@ -1,0 +1,281 @@
+{{- if .Values.labs.enabled }}
+{{- $fullname := include "cka.fullname" . -}}
+{{- $sa := printf "%s-ms-labs" $fullname -}}
+{{- $sessionRole := printf "%s-labs-session-owner" $fullname -}}
+{{- $sel := dict "ctx" . "component" "ms-labs" -}}
+{{- $prefix := .Values.labs.namespacePrefix -}}
+{{- /*
+ms-labs: per-student lab clusters. See docs/LAB_ARCHITECTURE.md.
+
+How its Kubernetes rights are scoped (the platform's riskiest credential):
+
+  cluster-wide   namespaces: get/list/watch/create/patch/delete
+                 rolebindings: create          ─┐ both limited by the
+                 bind ClusterRole session-owner ┘ ValidatingAdmissionPolicy below
+  per session    RoleBinding → session-owner (everything *inside* that namespace),
+                 created by ms-labs itself when it creates the namespace
+
+So ms-labs can read and change only namespaces labelled cka-lab/session=true,
+and cannot touch kube-system, the platform's own namespace or any other.
+The admission policy enforces the label and name prefix even if the code
+had a bug.
+
+Sessions run on the cluster this chart is installed in. For production, a
+dedicated lab cluster is better (see docs/LAB_ARCHITECTURE.md).
+*/ -}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $sa }}
+  labels: {{- include "cka.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-labs-controller
+  labels: {{- include "cka.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["create"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    verbs: ["bind"]
+    resourceNames: [{{ $sessionRole | quote }}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullname }}-labs-controller
+  labels: {{- include "cka.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fullname }}-labs-controller
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+---
+# Bound per session namespace only (never with a ClusterRoleBinding): full
+# control of one student's namespace — what the vcluster chart and the
+# toolbox Pod need, and nothing outside it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $sessionRole }}
+  labels: {{- include "cka.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+---
+# Read the API server's address (for the sessions' egress NetworkPolicy).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullname }}-labs-apiserver-endpoints
+  namespace: default
+  labels: {{- include "cka.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullname }}-labs-apiserver-endpoints
+  namespace: default
+  labels: {{- include "cka.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullname }}-labs-apiserver-endpoints
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+---
+# Two admission policies, one per resource, so each CEL expression is
+# type-checked against the right schema. They only match requests made by
+# ms-labs' ServiceAccount: a second line of defence behind RBAC.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $fullname }}-labs-namespaces
+  labels: {{- include "cka.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["namespaces"]
+  matchConditions:
+    - name: only-ms-labs
+      expression: "request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:{{ $sa }}'"
+  validations:
+    - expression: >-
+        request.operation == 'DELETE' ||
+        (object.metadata.name.startsWith('{{ $prefix }}') && has(object.metadata.labels) &&
+         'cka-lab/session' in object.metadata.labels && object.metadata.labels['cka-lab/session'] == 'true')
+      message: "ms-labs may only create or update namespaces named {{ $prefix }}* and labelled cka-lab/session=true"
+    - expression: >-
+        request.operation == 'CREATE' ||
+        (has(oldObject.metadata.labels) && 'cka-lab/session' in oldObject.metadata.labels &&
+         oldObject.metadata.labels['cka-lab/session'] == 'true')
+      message: "ms-labs may only change or delete lab session namespaces"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $fullname }}-labs-namespaces
+  labels: {{- include "cka.labels" . | nindent 4 }}
+spec:
+  policyName: {{ $fullname }}-labs-namespaces
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $fullname }}-labs-rolebindings
+  labels: {{- include "cka.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["rolebindings"]
+  matchConditions:
+    - name: only-ms-labs
+      expression: "request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:{{ $sa }}'"
+  validations:
+    - expression: >-
+        namespaceObject != null && has(namespaceObject.metadata.labels) &&
+        'cka-lab/session' in namespaceObject.metadata.labels && namespaceObject.metadata.labels['cka-lab/session'] == 'true'
+      message: "ms-labs may only manage RoleBindings inside lab session namespaces"
+    # Roles are namespace-local (the vcluster chart binds its own), so they
+    # cannot grant anything outside the session; of the ClusterRoles, only
+    # session-owner may be bound.
+    - expression: >-
+        request.operation == 'DELETE' || object.roleRef.kind == 'Role' ||
+        (object.roleRef.kind == 'ClusterRole' && object.roleRef.name == '{{ $sessionRole }}')
+      message: "ms-labs may only bind namespace Roles or the session-owner ClusterRole"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $fullname }}-labs-rolebindings
+  labels: {{- include "cka.labels" . | nindent 4 }}
+spec:
+  policyName: {{ $fullname }}-labs-rolebindings
+  validationActions: ["Deny"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-ms-labs
+  labels: {{- include "cka.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "cka.selector" $sel | nindent 4 }}
+  ports:
+    - name: http
+      port: 3003
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-ms-labs
+  labels:
+    {{- include "cka.labels" . | nindent 4 }}
+    {{- include "cka.selector" $sel | nindent 4 }}
+spec:
+  replicas: {{ .Values.labs.replicas }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels: {{- include "cka.selector" $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cka.labels" . | nindent 8 }}
+        {{- include "cka.selector" $sel | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ $sa }}
+      # The one platform component that talks to the Kubernetes API.
+      automountServiceAccountToken: true
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      # Terminals are long-lived WebSockets: give them time to close cleanly.
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: ms-labs
+          image: {{ include "cka.image" $sel }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - { name: http, containerPort: 3003 }
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: PORT, value: "3003" }
+            - { name: LOG_LEVEL, value: {{ .Values.logLevel | quote }} }
+            - { name: TRUST_PROXY_HOPS, value: {{ .Values.trustProxyHops | quote }} }
+            - { name: JWKS_URL, value: "http://{{ $fullname }}-ms-identity:3001/.well-known/jwks.json" }
+            - { name: PUBLIC_URL, value: {{ .Values.publicUrl | quote }} }
+            - { name: LABS_CONTROLLER_SERVICE_ACCOUNT, value: "{{ .Release.Namespace }}:{{ $sa }}" }
+            - { name: LABS_SESSION_CLUSTERROLE, value: {{ $sessionRole | quote }} }
+            - { name: LABS_NAMESPACE_PREFIX, value: {{ $prefix | quote }} }
+            - { name: LABS_TOOLBOX_IMAGE, value: {{ include "cka.image" (dict "ctx" . "component" "toolbox") | quote }} }
+            - { name: LABS_TOOLBOX_PULL_POLICY, value: {{ .Values.image.pullPolicy | quote }} }
+            - { name: LABS_MAX_SESSIONS, value: {{ .Values.labs.maxSessions | quote }} }
+            - { name: LABS_IDLE_MINUTES, value: {{ .Values.labs.idleMinutes | quote }} }
+            - { name: LABS_MAX_MINUTES, value: {{ .Values.labs.maxMinutes | quote }} }
+            - { name: LABS_QUOTA_REQUESTS_CPU, value: {{ .Values.labs.quota.requestsCpu | quote }} }
+            - { name: LABS_QUOTA_REQUESTS_MEMORY, value: {{ .Values.labs.quota.requestsMemory | quote }} }
+            - { name: LABS_QUOTA_LIMITS_MEMORY, value: {{ .Values.labs.quota.limitsMemory | quote }} }
+            - { name: LABS_QUOTA_PODS, value: {{ .Values.labs.quota.pods | quote }} }
+            - { name: LABS_NETWORK_POLICIES, value: {{ .Values.labs.networkPolicies | quote }} }
+            {{- with .Values.labs.apiServerCidrs }}
+            - { name: LABS_APISERVER_CIDRS, value: {{ join "," . | quote }} }
+            {{- end }}
+            {{- range $k, $v := (.Values.labs.extraEnv | default dict) }}
+            - { name: {{ $k }}, value: {{ $v | quote }} }
+            {{- end }}
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          resources: {{- toYaml .Values.labs.resources | nindent 12 }}
+          {{- include "cka.containerSecurity" . | nindent 10 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 256Mi }
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

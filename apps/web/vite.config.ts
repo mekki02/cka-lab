@@ -56,6 +56,8 @@ export default defineConfig({
     proxy: {
       '/api/identity': 'http://localhost:3001',
       '/api/learning': 'http://localhost:3002',
+      // ws: the browser terminal is a WebSocket on the same path prefix.
+      '/api/labs': { target: 'http://localhost:3003', ws: true },
     },
   },
   build: {

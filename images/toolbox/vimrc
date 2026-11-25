@@ -1,0 +1,7 @@
+" YAML-friendly defaults (what most CKA candidates set first in the exam).
+set expandtab
+set tabstop=2
+set shiftwidth=2
+set autoindent
+set number
+syntax on

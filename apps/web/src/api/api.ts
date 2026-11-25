@@ -3,6 +3,10 @@ import type {
   AcceptInviteRequest,
   ChangePasswordRequest,
   CheatsheetDto,
+  CheckResultDto,
+  LabSessionDto,
+  StartLabSessionRequest,
+  VerifyResultDto,
   Curriculum,
   DashboardDto,
   ExamAttemptDto,
@@ -33,7 +37,7 @@ import { baseQuery } from './baseQuery';
 export const api = createApi({
   reducerPath: 'api',
   baseQuery,
-  tagTypes: ['Me', 'Users', 'Progress', 'Dashboard', 'Labs', 'QuizAttempts', 'ExamAttempts'],
+  tagTypes: ['Me', 'Users', 'Progress', 'Dashboard', 'Labs', 'QuizAttempts', 'ExamAttempts', 'LabSession'],
   endpoints: b => ({
     // --- identity ---------------------------------------------------------
     me: b.query<UserDto, void>({ query: () => 'identity/auth/me', providesTags: ['Me'] }),
@@ -138,6 +142,49 @@ export const api = createApi({
     }),
 
     cheatsheets: b.query<CheatsheetDto[], void>({ query: () => 'learning/cheatsheets', keepUnusedDataFor: 3600 }),
+
+    // --- labs (hands-on environments) -------------------------------------
+    labSession: b.query<LabSessionDto | null, void>({
+      query: () => 'labs/session',
+      transformResponse: (r: { session: LabSessionDto | null }) => r.session,
+      providesTags: ['LabSession'],
+    }),
+    startLabSession: b.mutation<LabSessionDto, StartLabSessionRequest>({
+      query: body => ({ url: 'labs/session', method: 'POST', body }),
+      async onQueryStarted(_arg, { dispatch, queryFulfilled }) {
+        const { data } = await queryFulfilled;
+        dispatch(api.util.upsertQueryData('labSession', undefined, data));
+      },
+    }),
+    restartLabSession: b.mutation<LabSessionDto, void>({
+      query: () => ({ url: 'labs/session/restart', method: 'POST' }),
+      async onQueryStarted(_arg, { dispatch, queryFulfilled }) {
+        const { data } = await queryFulfilled;
+        dispatch(api.util.upsertQueryData('labSession', undefined, data));
+      },
+    }),
+    endLabSession: b.mutation<void, void>({
+      query: () => ({ url: 'labs/session', method: 'DELETE' }),
+      async onQueryStarted(_arg, { dispatch, queryFulfilled }) {
+        await queryFulfilled;
+        dispatch(api.util.upsertQueryData('labSession', undefined, null));
+      },
+    }),
+    runTaskChecks: b.mutation<CheckResultDto[], string>({
+      query: taskId => ({ url: `labs/session/tasks/${taskId}/checks`, method: 'POST' }),
+      // Results are stored on the session: merge them into the cached copy.
+      async onQueryStarted(_taskId, { dispatch, queryFulfilled }) {
+        const { data } = await queryFulfilled;
+        dispatch(
+          api.util.updateQueryData('labSession', undefined, s => {
+            if (s) for (const r of data) s.results[`${r.taskId}/${r.checkId}`] = r;
+          }),
+        );
+      },
+    }),
+    verifyLab: b.mutation<VerifyResultDto, void>({
+      query: () => ({ url: 'labs/session/verify', method: 'POST' }),
+    }),
   }),
 });
 
@@ -175,4 +222,10 @@ export const {
   useUpdateExamTaskMutation,
   useSubmitExamMutation,
   useCheatsheetsQuery,
+  useLabSessionQuery,
+  useStartLabSessionMutation,
+  useRestartLabSessionMutation,
+  useEndLabSessionMutation,
+  useRunTaskChecksMutation,
+  useVerifyLabMutation,
 } = api;

@@ -7,6 +7,8 @@ import TimerOutlinedIcon from '@mui/icons-material/TimerOutlined';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import BookmarkBorderIcon from '@mui/icons-material/BookmarkBorder';
 import PeopleOutlineIcon from '@mui/icons-material/PeopleOutline';
+import TerminalIcon from '@mui/icons-material/Terminal';
+import { LABS_ENABLED } from '@/config';
 import type { Role } from '@cka/contracts';
 
 /** Navigation as data (the boilerplate console's pattern). */
@@ -25,6 +27,7 @@ export const NAV_SECTIONS: { title?: string; items: NavItem[] }[] = [
       { label: 'Dashboard', to: '/', icon: <DashboardOutlinedIcon /> },
       { label: 'Course', to: '/learn', icon: <SchoolOutlinedIcon />, prefix: true },
       { label: 'Labs', to: '/labs', icon: <ScienceOutlinedIcon />, prefix: true },
+      ...(LABS_ENABLED ? [{ label: 'Playground', to: '/playground', icon: <TerminalIcon /> }] : []),
       { label: 'Quizzes', to: '/quizzes', icon: <QuizOutlinedIcon />, prefix: true },
       { label: 'Mock exams', to: '/exams', icon: <TimerOutlinedIcon />, prefix: true },
     ],

@@ -1,0 +1,8 @@
+
+  Welcome to your lab cluster.
+
+  You are cluster-admin of a private, disposable Kubernetes cluster.
+  Nothing you do here can affect other students — experiment freely.
+
+  Shortcuts:  k = kubectl   $do = --dry-run=client -o yaml   $now = --force --grace-period=0
+

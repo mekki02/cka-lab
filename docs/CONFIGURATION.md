@@ -43,6 +43,31 @@ Variables ending in `_FILE` read the value from a file instead, so Kubernetes ca
 | Variable | Default | Description |
 |---|---|---|
 | `APP_NAME` | `CKA Lab` | Product name shown in the UI (written to `/config.js` at start) |
+| `LABS_ENABLED` | `false` (`true` in `npm run dev`) | Show browser lab environments (terminal, Playground). Set by Helm from `labs.enabled` |
+
+## ms-labs
+
+Only needed for browser lab environments; see [LAB_ARCHITECTURE](LAB_ARCHITECTURE.md). The Helm chart sets all of these from `labs.*`.
+
+| Variable | Default | Description |
+|---|---|---|
+| `NODE_ENV`, `PORT` (`3003`), `LOG_LEVEL`, `TRUST_PROXY_HOPS`, `SWAGGER_ENABLED` | | as above |
+| `JWKS_URL` | `http://localhost:3001/.well-known/jwks.json` | ms-identity's public keys |
+| `PUBLIC_URL` | `http://localhost:5173` | Allowed `Origin`(s) of the terminal WebSocket, comma-separated |
+| `CONTENT_DIR` | `<cwd>/content` | Lab content (`labs/*.yaml`) |
+| `LABS_KUBE_CONTEXT` | empty = in-cluster ServiceAccount | kubeconfig context to use instead (development) |
+| `LABS_CONTROLLER_SERVICE_ACCOUNT` | empty | `<namespace>:<name>` of ms-labs; bound in each session namespace. Empty when the kubeconfig user is already admin (development) |
+| `LABS_SESSION_CLUSTERROLE` | `cka-labs-session-owner` | ClusterRole bound inside session namespaces |
+| `LABS_NAMESPACE_PREFIX` | `lab-` | Must match the admission policy |
+| `LABS_TOOLBOX_IMAGE`, `LABS_TOOLBOX_PULL_POLICY` | `cka-lab/toolbox:dev`, `IfNotPresent` | Terminal image |
+| `LABS_VCLUSTER_CHART`, `LABS_VCLUSTER_CHART_REPO`, `LABS_VCLUSTER_CHART_VERSION` | `vcluster`, `https://charts.loft.sh`, `0.37.7` | The image ships the chart as a `.tgz` (no download at run time) |
+| `LABS_KUBERNETES_VERSION` | `1.36` | Shown to students; must match the chart's Kubernetes |
+| `LABS_HELM_BIN` | `helm` | |
+| `LABS_MAX_SESSIONS` | `10` | Running sessions, all students |
+| `LABS_IDLE_MINUTES`, `LABS_MAX_MINUTES`, `LABS_PROVISION_TIMEOUT_MINUTES` | `60`, `240`, `10` | Expiry |
+| `LABS_QUOTA_REQUESTS_CPU`, `_REQUESTS_MEMORY`, `_LIMITS_MEMORY`, `_PODS` | `2`, `3Gi`, `6Gi`, `50` | Per-session ResourceQuota |
+| `LABS_NETWORK_POLICIES` | `true` | Per-session isolation policy |
+| `LABS_APISERVER_CIDRS` | detected | API server CIDRs sessions may reach (the vcluster syncer needs it) |
 
 ## Docker Compose (`.env`)
 
@@ -67,7 +92,7 @@ See `deploy/helm/cka-lab/values.yaml` (every value is commented). The most impor
 |---|---|---|
 | `publicUrl` | `https://cka.example.com` | Must match the host people use |
 | `appName` | `CKA Lab` | |
-| `image.registry`, `image.tag`, `image.pullPolicy` | | Images are `<registry>/{ms-identity,ms-learning,web}:<tag>` (tag defaults to appVersion) |
+| `image.registry`, `image.tag`, `image.pullPolicy` | | Images are `<registry>/{ms-identity,ms-learning,web,ms-labs,toolbox}:<tag>` (tag defaults to appVersion) |
 | `imagePullSecrets` | `[]` | For private registries |
 | `cookieSecure`, `trustProxyHops`, `logLevel` | `true`, `1`, `info` | |
 | `jwt.existingSecret`, `jwt.keyId` | generated, `key-1` | Secret with key `jwt-private-key.pem` |
@@ -81,3 +106,7 @@ See `deploy/helm/cka-lab/values.yaml` (every value is commented). The most impor
 | `networkPolicy.enabled`, `.ingressControllerNamespaceSelector` | enabled, ns `traefik` | Must select the namespace your controller runs in |
 | `podDisruptionBudget.enabled` | `true` | For components with more than one replica |
 | `podSecurityContext`, `nodeSelector`, `tolerations`, `affinity` | hardened defaults | Applied to app Pods |
+| `labs.enabled` | `false` | Browser lab environments (needs the `ms-labs` and `toolbox` images) |
+| `labs.maxSessions`, `.idleMinutes`, `.maxMinutes` | `10`, `60`, `240` | |
+| `labs.quota.*`, `labs.networkPolicies`, `labs.apiServerCidrs` | see `values.yaml` | Per-session limits and isolation |
+| `labs.replicas`, `.resources`, `.extraEnv`, `.namespacePrefix` | `1`, …, `lab-` | Keep one replica (see LAB_ARCHITECTURE) |

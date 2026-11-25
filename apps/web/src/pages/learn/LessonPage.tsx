@@ -31,6 +31,7 @@ import { EmptyState, ErrorState, Loading } from '@/components/states';
 import { proseSx } from '@/components/prose';
 import { useCurriculum, useProgressIndex } from '@/hooks/useCurriculum';
 import { mdxComponents } from '@/lessons/mdx-components';
+import { useTerminalDockOpen } from '@/labs/terminalBridge';
 import { StatusIcon } from './ModulePage';
 
 type MdxContent = ComponentType<{ components?: object }>;
@@ -78,6 +79,7 @@ export const LessonPage = () => {
   const [visit] = useVisitLessonMutation();
   const [setStatus, statusState] = useSetLessonStatusMutation();
   const [setBookmark] = useSetBookmarkMutation();
+  const dockOpen = useTerminalDockOpen();
 
   const lesson = index?.lessons.get(lessonId);
   const published = lesson?.status === 'published' && !!loaders[lessonId];
@@ -116,9 +118,18 @@ export const LessonPage = () => {
     .filter(p => p && p.status === 'published' && progress.status.get(p.id) !== 'COMPLETED');
 
   return (
-    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '220px minmax(0, 1fr)', lg: '220px minmax(0, 1fr) 200px' }, gap: { md: 4 }, maxWidth: 1400, mx: 'auto' }}>
+    <Box
+      sx={{
+        display: 'grid',
+        // With the terminal docked, the lesson gets the remaining width as one column.
+        gridTemplateColumns: dockOpen ? '1fr' : { xs: '1fr', md: '220px minmax(0, 1fr)', lg: '220px minmax(0, 1fr) 200px' },
+        gap: { md: 4 },
+        maxWidth: dockOpen ? 900 : 1400,
+        mx: 'auto',
+      }}
+    >
       {/* Module outline */}
-      <Box component="nav" aria-label="Module lessons" sx={{ display: { xs: 'none', md: 'block' } }}>
+      <Box component="nav" aria-label="Module lessons" sx={{ display: dockOpen ? 'none' : { xs: 'none', md: 'block' } }}>
         <Box sx={{ position: 'sticky', top: 88 }}>
           <Link component={RouterLink} to={`/learn/${m.id}`} underline="hover" variant="overline" color="text.secondary">
             {m.title}
@@ -248,7 +259,7 @@ export const LessonPage = () => {
       </Box>
 
       {/* On this page */}
-      <Box component="nav" aria-label="On this page" sx={{ display: { xs: 'none', lg: 'block' } }}>
+      <Box component="nav" aria-label="On this page" sx={{ display: dockOpen ? 'none' : { xs: 'none', lg: 'block' } }}>
         {headings.length > 0 && body.Body && (
           <Box sx={{ position: 'sticky', top: 88 }}>
             <Typography variant="overline" color="text.secondary">

@@ -85,11 +85,18 @@ export interface UpdateLessonProgressRequest {
 export type LabType = 'guided' | 'challenge' | 'troubleshooting';
 export type Difficulty = 'beginner' | 'intermediate' | 'advanced';
 
+/**
+ * How a lab environment validates a check automatically (see
+ * docs/LAB_ARCHITECTURE.md). null = the student compares the output by eye.
+ */
+export type CheckMatch = 'exact' | 'contains' | 'regex' | 'success';
+
 export interface LabCheck {
   id: string;
   description: string;
   command: string;
   expect: string;
+  match: CheckMatch | null;
 }
 
 export interface LabTask {

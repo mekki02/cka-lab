@@ -43,6 +43,7 @@ tasks:
         description: The Service forwards 80 → 8080
         command: kubectl -n expose-lab get svc api -o jsonpath='{.spec.ports[0].port}->{.spec.ports[0].targetPort}'
         expect: "80->8080"
+        match: exact
     solution: |
       The commands in the description are the solution. Output shows a mix of the three Pod names, in random
       order — kube-proxy picks a backend per connection.
@@ -65,6 +66,7 @@ tasks:
         description: The node port is 30090
         command: kubectl -n expose-lab get svc api-np -o jsonpath='{.spec.ports[0].nodePort}'
         expect: "30090"
+        match: exact
       - id: every-node
         description: Every node answers (repeat with each INTERNAL-IP)
         command: kubectl run client --rm -i --restart=Never --image=busybox:1.36 -- wget -qO- -T 3 http://<node-ip>:30090/hostname
@@ -94,6 +96,7 @@ tasks:
         description: The Service has no ClusterIP
         command: kubectl -n expose-lab get svc api-headless -o jsonpath='{.spec.clusterIP}'
         expect: None
+        match: exact
       - id: dns
         description: DNS returns one address per Pod
         command: kubectl -n expose-lab run client --rm -i --restart=Never --image=busybox:1.36 -- nslookup api-headless

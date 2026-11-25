@@ -83,9 +83,14 @@ export const CurriculumSchema = z
 // --- labs/*.yaml -----------------------------------------------------------
 
 /**
- * A check is a command the student runs in their own terminal and the output
- * it should print. The platform shows it; it does not run it (see
- * docs/LAB_ARCHITECTURE.md for the future automated runner).
+ * A check is a read-only command and the output it should print.
+ *
+ * Without `match`, the student runs it and compares by eye. With `match`, a
+ * lab environment (ms-labs) runs it server-side and decides:
+ *   exact     trimmed stdout equals `expect`
+ *   contains  stdout contains `expect`
+ *   regex     stdout matches the regular expression `expect`
+ *   success   the command exits 0 (`expect` describes what that means)
  */
 export const CheckSchema = z
   .object({
@@ -93,8 +98,21 @@ export const CheckSchema = z
     description: z.string(),
     command: z.string().min(1),
     expect: z.string().min(1),
+    match: z.enum(['exact', 'contains', 'regex', 'success']).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((c, ctx) => {
+    if (c.match && /<[a-z]+(?:-[a-z]+)+>/.test(c.command)) {
+      ctx.addIssue({ code: 'custom', message: `${c.id}: auto checks cannot contain placeholders like <node-ip>` });
+    }
+    if (c.match === 'regex') {
+      try {
+        new RegExp(c.expect);
+      } catch {
+        ctx.addIssue({ code: 'custom', message: `${c.id}: expect is not a valid regular expression` });
+      }
+    }
+  });
 
 export const LabSchema = z
   .object({

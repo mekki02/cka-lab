@@ -75,14 +75,14 @@ Every state-changing request must carry an `x-csrf-token` header equal to the `c
 |---|---|
 | Pod security | `runAsNonRoot`, explicit UID/GID, `fsGroup`, `seccompProfile: RuntimeDefault` — compatible with the **restricted** Pod Security Standard |
 | Containers | `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true`, `capabilities.drop: [ALL]` |
-| API access | `automountServiceAccountToken: false` — the apps have no Kubernetes credentials at all |
+| API access | `automountServiceAccountToken: false` — identity, learning and web have no Kubernetes credentials at all; ms-labs (optional) has a narrowly scoped ServiceAccount |
 | Network | Ingress allowed only from the controller namespace; Postgres only from the two services; identity's internal port only from the controller and ms-learning |
 
 Recommended: label the namespace `pod-security.kubernetes.io/enforce=restricted` (the bundled PostgreSQL also complies).
 
 ## Lab execution
 
-The platform never runs commands against anyone's cluster today; students run them in their own terminal. The future automated lab runner has its own security design (no cluster-admin for the platform, per-session namespaces or disposable clusters, short-lived scoped credentials never sent to browsers) in [LAB_ARCHITECTURE](LAB_ARCHITECTURE.md).
+With `labs.enabled`, ms-labs gives every student a shell and a virtual cluster. It is the only component holding Kubernetes credentials, scoped by RBAC to session namespaces it creates and fenced by two ValidatingAdmissionPolicies; students are admins of their virtual cluster only, isolated by NetworkPolicy, Pod Security baseline, quotas and expiry; the terminal WebSocket is cookie-authenticated and Origin-checked. The full threat table and the tests that back it are in [LAB_ARCHITECTURE](LAB_ARCHITECTURE.md#security). Without `labs.enabled`, the platform runs no commands at all.
 
 ## Reporting
 

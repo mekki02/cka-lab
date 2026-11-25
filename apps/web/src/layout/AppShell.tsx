@@ -29,7 +29,8 @@ import { useState } from 'react';
 import { Link as RouterLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import type { UserDto } from '@cka/contracts';
 import { useLogoutMutation } from '@/api/api';
-import { APP_NAME } from '@/config';
+import { APP_NAME, LABS_ENABLED } from '@/config';
+import { DOCK_WIDTH, TerminalBridgeProvider, TerminalDockPanel, TerminalDockToggle, useTerminalDock } from '@/labs/TerminalDock';
 import { useThemeMode } from '@/theme/ThemeModeProvider';
 import { NAV_SECTIONS } from './nav';
 import { SearchButton } from './SearchDialog';
@@ -172,6 +173,11 @@ export const AppShell = ({ user }: { user: UserDto }) => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { pathname } = useLocation();
+  const dock = useTerminalDock();
+  // Lab and playground pages embed their own terminal.
+  const dockAllowed = LABS_ENABLED && !/^\/(labs\/[^/]+|playground)\/?$/.test(pathname);
+  const dockOpen = dockAllowed && dock.open;
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
@@ -185,6 +191,7 @@ export const AppShell = ({ user }: { user: UserDto }) => {
           {isMobile && <Logo />}
           <Box sx={{ flex: 1 }} />
           <SearchButton />
+          {dockAllowed && <TerminalDockToggle open={dock.open} onToggle={() => dock.setOpen(o => !o)} />}
           <ThemeToggle />
           <UserMenu user={user} />
         </Toolbar>
@@ -204,9 +211,12 @@ export const AppShell = ({ user }: { user: UserDto }) => {
 
       <Box component="main" sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <Toolbar />
-        <Box sx={{ flex: 1, px: { xs: 2, sm: 3, lg: 4 }, py: { xs: 2, md: 4 } }}>
-          <Outlet />
+        <Box sx={{ flex: 1, px: { xs: 2, sm: 3, lg: 4 }, py: { xs: 2, md: 4 }, mr: { md: dockOpen ? DOCK_WIDTH : 0 } }}>
+          <TerminalBridgeProvider open={dockOpen} bridge={dockOpen ? dock.bridge : null}>
+            <Outlet />
+          </TerminalBridgeProvider>
         </Box>
+        {dockOpen && <TerminalDockPanel onClose={() => dock.setOpen(false)} setPaste={dock.setPaste} />}
       </Box>
     </Box>
   );

@@ -43,7 +43,7 @@ export class LabsService {
         title: t.title,
         description: t.description,
         hints: t.hints,
-        checks: t.checks,
+        checks: t.checks.map(c => ({ ...c, match: c.match ?? null })),
         solution: revealed.includes(t.id) ? t.solution : null,
       })),
       verifyScript: lab.verifyScript ?? null,

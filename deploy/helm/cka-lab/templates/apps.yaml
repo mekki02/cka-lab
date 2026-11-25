@@ -97,6 +97,7 @@ spec:
             {{- end }}
             {{- if eq $c.key "web" }}
             - { name: APP_NAME, value: {{ $root.Values.appName | quote }} }
+            - { name: LABS_ENABLED, value: {{ $root.Values.labs.enabled | quote }} }
             {{- end }}
             {{- range $k, $v := ($vals.extraEnv | default dict) }}
             - { name: {{ $k }}, value: {{ $v | quote }} }
