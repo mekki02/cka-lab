@@ -1,5 +1,5 @@
 import { Column, Entity, PrimaryColumn, PrimaryGeneratedColumn } from 'typeorm';
-import type { ExamTaskStatus, GradedQuestion, LabStatus } from '@cka/contracts';
+import type { ExamTaskStatus, ExerciseStatus, GradedQuestion, LabStatus } from '@cka/contracts';
 
 @Entity({ name: 'lab_progress' })
 export class LabProgress {
@@ -36,4 +36,15 @@ export class ExamAttempt {
   @Column({ name: 'task_states', type: 'jsonb' }) taskStates: ExamTaskStates;
   @Column({ type: 'int', nullable: true }) score: number | null;
   @Column({ name: 'max_score', type: 'int' }) maxScore: number;
+}
+
+@Entity({ name: 'exercise_progress' })
+export class ExerciseProgress {
+  @PrimaryColumn({ name: 'user_id', type: 'uuid' }) userId: string;
+  @PrimaryColumn({ name: 'exercise_id', type: 'varchar', length: 120 }) exerciseId: string;
+  @Column({ type: 'varchar', length: 16 }) status: ExerciseStatus;
+  @Column({ type: 'int', default: 0 }) attempts: number;
+  @Column({ name: 'solution_revealed', type: 'boolean', default: false }) solutionRevealed: boolean;
+  @Column({ name: 'completed_at', type: 'timestamptz', nullable: true }) completedAt: Date | null;
+  @Column({ name: 'updated_at', type: 'timestamptz' }) updatedAt: Date;
 }

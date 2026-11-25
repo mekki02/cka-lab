@@ -1,0 +1,83 @@
+id: eps-readiness
+title: "Readiness decides who gets traffic"
+module: services
+lesson: endpointslices
+kind: exercise
+difficulty: intermediate
+minutes: 10
+order: 1
+tags: [endpointslices, probes]
+namespaces: [ex-ready]
+setup: |
+  cat <<'YAML' | kubectl apply -f -
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata: { name: ready-demo, namespace: ex-ready }
+  spec:
+    replicas: 2
+    selector: { matchLabels: { app: ready-demo } }
+    template:
+      metadata: { labels: { app: ready-demo } }
+      spec:
+        containers:
+          - name: web
+            image: nginx:1.27
+            readinessProbe:
+              exec: { command: ["cat", "/tmp/ready"] }
+              periodSeconds: 2
+  YAML
+  kubectl -n ex-ready expose deployment ready-demo --port=80
+  # `kubectl wait -l` fails if the ReplicaSet has not created the Pods yet.
+  timeout 120 bash -c 'until [ "$(kubectl -n ex-ready get pods -l app=ready-demo -o name | wc -l)" -ge 2 ]; do sleep 1; done'
+  kubectl -n ex-ready wait --for=jsonpath='{.status.phase}'=Running pod -l app=ready-demo --timeout=180s
+statement: |
+  In `ex-ready`, both `ready-demo` Pods are `Running` but `0/1` Ready: their readiness probe runs
+  `cat /tmp/ready`, and the file does not exist. So the Service `ready-demo` has no ready endpoints.
+
+  1. Look at the EndpointSlice: `k -n ex-ready get endpointslices -l kubernetes.io/service-name=ready-demo -o yaml`
+     — the Pods are listed, with `ready: false`.
+  2. Make **exactly one** Pod ready by creating the file inside it. Do not change the Deployment.
+  3. Enter the name of the Pod that now receives traffic.
+inputs:
+  - id: pod
+    label: Name of the Pod that receives traffic
+    placeholder: ready-demo-…
+checks:
+  - id: one-ready
+    description: Exactly 1 endpoint of ready-demo is ready
+    type: cluster
+    command: kubectl -n ex-ready get endpointslices -l kubernetes.io/service-name=ready-demo -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.targetRef.name}{"\n"}{end}' 2>/dev/null | grep -c .
+    expect: "1"
+    match: number
+  - id: no-restarts
+    description: No container was restarted — readiness affects traffic, not the container
+    type: cluster
+    command: kubectl -n ex-ready get pods -l app=ready-demo -o jsonpath='{range .items[*]}{.status.containerStatuses[0].restartCount}{"\n"}{end}' | sort -u
+    expect: "0"
+    match: exact
+  - id: pod
+    description: You named the backend that receives traffic
+    type: answer
+    input: pod
+    expectCommand: kubectl -n ex-ready get endpointslices -l kubernetes.io/service-name=ready-demo -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.targetRef.name}{end}'
+hints:
+  - "`k -n ex-ready exec <pod> -- touch /tmp/ready`"
+  - "Watch the change: `k -n ex-ready get endpointslices -l kubernetes.io/service-name=ready-demo -o wide -w`"
+solution: |
+  ```bash
+  POD=$(k -n ex-ready get pods -l app=ready-demo -o jsonpath='{.items[0].metadata.name}')
+  k -n ex-ready exec "$POD" -- touch /tmp/ready
+  k -n ex-ready get endpointslices -l kubernetes.io/service-name=ready-demo \
+    -o jsonpath='{range .items[*].endpoints[*]}{.targetRef.name} ready={.conditions.ready}{"\n"}{end}'
+  ```
+
+  Within one probe period the endpoint flips to `ready: true` and kube-proxy starts sending it traffic.
+  `rm /tmp/ready` takes it out again — the container keeps running the whole time. (A failing **liveness**
+  probe, by contrast, restarts the container.)
+autotest:
+  solve: |
+    POD=$(kubectl -n ex-ready get pods -l app=ready-demo -o jsonpath='{.items[0].metadata.name}')
+    kubectl -n ex-ready exec "$POD" -- touch /tmp/ready
+    sleep 6
+  answers:
+    pod: "$(kubectl -n ex-ready get pods -l app=ready-demo -o jsonpath='{.items[0].metadata.name}')"

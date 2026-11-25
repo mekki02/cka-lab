@@ -21,6 +21,7 @@ import TimelapseIcon from '@mui/icons-material/Timelapse';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import ScienceOutlinedIcon from '@mui/icons-material/ScienceOutlined';
 import QuizOutlinedIcon from '@mui/icons-material/QuizOutlined';
+import { ExerciseList } from '@/pages/exercises/ExerciseList';
 import { Link as RouterLink, useParams } from 'react-router-dom';
 import { EmptyState, ErrorState, Loading } from '@/components/states';
 import { moduleCompletion, useCurriculum, useProgressIndex } from '@/hooks/useCurriculum';
@@ -141,6 +142,16 @@ export const ModulePage = () => {
                 )}
               </CardContent>
             </Card>
+            {m.exercises.length > 0 && (
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    Exercises & challenges
+                  </Typography>
+                  <ExerciseList exercises={m.exercises} dense />
+                </CardContent>
+              </Card>
+            )}
             {(m.labs.length > 0 || m.quizzes.length > 0) && (
               <Card>
                 <CardContent>

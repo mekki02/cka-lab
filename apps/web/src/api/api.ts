@@ -9,6 +9,11 @@ import type {
   VerifyResultDto,
   Curriculum,
   DashboardDto,
+  ExerciseDetailDto,
+  ExerciseProgressDto,
+  ExerciseSummaryDto,
+  ExerciseValidationDto,
+  ValidateExerciseRequest,
   ExamAttemptDto,
   ExamSummaryDto,
   InviteUserRequest,
@@ -37,7 +42,7 @@ import { baseQuery } from './baseQuery';
 export const api = createApi({
   reducerPath: 'api',
   baseQuery,
-  tagTypes: ['Me', 'Users', 'Progress', 'Dashboard', 'Labs', 'QuizAttempts', 'ExamAttempts', 'LabSession'],
+  tagTypes: ['Me', 'Users', 'Progress', 'Dashboard', 'Labs', 'QuizAttempts', 'ExamAttempts', 'LabSession', 'Exercises'],
   endpoints: b => ({
     // --- identity ---------------------------------------------------------
     me: b.query<UserDto, void>({ query: () => 'identity/auth/me', providesTags: ['Me'] }),
@@ -107,6 +112,21 @@ export const api = createApi({
       invalidatesTags: (_r, _e, { labId }) => ['Labs', { type: 'Labs', id: labId }, 'Dashboard'],
     }),
 
+    exercises: b.query<ExerciseSummaryDto[], void>({ query: () => 'learning/exercises', keepUnusedDataFor: 3600 }),
+    exerciseProgress: b.query<ExerciseProgressDto[], void>({ query: () => 'learning/exercises/progress', providesTags: ['Exercises'] }),
+    exercise: b.query<ExerciseDetailDto, string>({
+      query: id => `learning/exercises/${id}`,
+      providesTags: (_r, _e, id) => [{ type: 'Exercises', id }],
+    }),
+    revealExerciseSolution: b.mutation<{ solution: string }, string>({
+      query: id => ({ url: `learning/exercises/${id}/solution`, method: 'POST' }),
+      invalidatesTags: (_r, _e, id) => [{ type: 'Exercises', id }],
+    }),
+    recordExerciseAttempt: b.mutation<ExerciseProgressDto, { exerciseId: string; passed: boolean }>({
+      query: ({ exerciseId, passed }) => ({ url: `learning/exercises/${exerciseId}/attempts`, method: 'POST', body: { passed } }),
+      invalidatesTags: (_r, _e, { exerciseId }) => ['Exercises', { type: 'Exercises', id: exerciseId }, 'Dashboard'],
+    }),
+
     quiz: b.query<QuizDto, string>({ query: id => `learning/quizzes/${id}` }),
     quizAttempts: b.query<QuizAttemptDto[], void>({ query: () => 'learning/quizzes/attempts', providesTags: ['QuizAttempts'] }),
     submitQuiz: b.mutation<QuizAttemptDto, { quizId: string; answers: Record<string, string[]> }>({
@@ -147,7 +167,7 @@ export const api = createApi({
     labSession: b.query<LabSessionDto | null, void>({
       query: () => 'labs/session',
       transformResponse: (r: { session: LabSessionDto | null }) => r.session,
-      providesTags: ['LabSession'],
+      providesTags: ['LabSession', 'Exercises'],
     }),
     startLabSession: b.mutation<LabSessionDto, StartLabSessionRequest>({
       query: body => ({ url: 'labs/session', method: 'POST', body }),
@@ -184,6 +204,17 @@ export const api = createApi({
     }),
     verifyLab: b.mutation<VerifyResultDto, void>({
       query: () => ({ url: 'labs/session/verify', method: 'POST' }),
+    }),
+    /** Loads an exercise into the playground (or reloads it: the exercise's reset). */
+    loadExercise: b.mutation<LabSessionDto, string>({
+      query: exerciseId => ({ url: 'labs/session/exercise', method: 'POST', body: { exerciseId } }),
+      async onQueryStarted(_arg, { dispatch, queryFulfilled }) {
+        const { data } = await queryFulfilled;
+        dispatch(api.util.upsertQueryData('labSession', undefined, data));
+      },
+    }),
+    validateExercise: b.mutation<ExerciseValidationDto, ValidateExerciseRequest>({
+      query: body => ({ url: 'labs/session/exercise/validate', method: 'POST', body }),
     }),
   }),
 });
@@ -228,4 +259,11 @@ export const {
   useEndLabSessionMutation,
   useRunTaskChecksMutation,
   useVerifyLabMutation,
+  useExercisesQuery,
+  useExerciseProgressQuery,
+  useExerciseQuery,
+  useRevealExerciseSolutionMutation,
+  useRecordExerciseAttemptMutation,
+  useLoadExerciseMutation,
+  useValidateExerciseMutation,
 } = api;

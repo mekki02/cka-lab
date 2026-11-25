@@ -1,0 +1,76 @@
+id: arch-control-loops
+title: "Watch the control loops work"
+module: foundations-architecture
+lesson: architecture-control-plane
+kind: exercise
+difficulty: beginner
+minutes: 10
+order: 1
+tags: [controllers, ownerReferences]
+namespaces: [ex-loops]
+setup: |
+  kubectl -n ex-loops create deployment loops --image=nginx:1.27 --replicas=3
+  kubectl -n ex-loops rollout status deployment loops --timeout=180s
+statement: |
+  Nothing in Kubernetes "runs" your Deployment. Controllers keep comparing what you asked for with what
+  exists, and act on the difference. See it for yourself in namespace `ex-loops`:
+
+  1. Scale the Deployment `loops` to **5** replicas and watch new Pods appear:
+     `k -n ex-loops get pods -w` (Ctrl-C to stop).
+  2. **Delete one** of the `loops` Pods. A replacement appears within seconds — but who created it?
+     Read the replacement's `metadata.ownerReferences`.
+  3. Answer the two questions below.
+inputs:
+  - id: creator
+    label: Which object's controller created the replacement Pod?
+    kind: choice
+    options:
+      - { id: a, text: The Deployment `loops` }
+      - { id: b, text: The ReplicaSet owned by `loops` }
+      - { id: c, text: The kubelet on the node }
+      - { id: d, text: The scheduler }
+  - id: rs-name
+    label: The exact name of the ReplicaSet that owns the loops Pods
+    placeholder: loops-…
+checks:
+  - id: scaled
+    description: loops has 5 ready replicas
+    type: cluster
+    command: kubectl -n ex-loops get deploy loops -o jsonpath='{.status.readyReplicas}'
+    expect: "5"
+    match: exact
+  - id: deleted
+    description: You deleted a loops Pod and it was replaced
+    type: history
+    expect: 'delete +(pods?|po)\b|delete +(pods?|po)/'
+  - id: creator
+    description: You know which controller replaces Pods
+    type: answer
+    input: creator
+    expect: b
+  - id: rs-name
+    description: You found the owning ReplicaSet
+    type: answer
+    input: rs-name
+    expectCommand: kubectl -n ex-loops get pods -l app=loops -o jsonpath='{.items[0].metadata.ownerReferences[0].name}'
+hints:
+  - "`k -n ex-loops scale deploy loops --replicas=5`"
+  - "`k -n ex-loops get pod <name> -o jsonpath='{.metadata.ownerReferences[0].kind}/{.metadata.ownerReferences[0].name}{\"\\n\"}'`"
+solution: |
+  ```bash
+  k -n ex-loops scale deploy loops --replicas=5
+  k -n ex-loops delete pod "$(k -n ex-loops get pods -l app=loops -o jsonpath='{.items[0].metadata.name}')"
+  k -n ex-loops get pods -l app=loops -o custom-columns=NAME:.metadata.name,OWNER:.metadata.ownerReferences[0].name
+  ```
+
+  The chain is **Deployment → ReplicaSet → Pods**. The Deployment controller manages ReplicaSets (one per
+  template version, which is how rollbacks work); the ReplicaSet controller keeps the Pod count. The
+  scheduler only picks a node for the new Pod, and the kubelet only runs what is assigned to its node.
+autotest:
+  solve: |
+    kubectl -n ex-loops scale deploy loops --replicas=5
+    kubectl -n ex-loops delete pod "$(kubectl -n ex-loops get pods -l app=loops -o jsonpath='{.items[0].metadata.name}')"
+    kubectl -n ex-loops rollout status deploy loops --timeout=120s
+  answers:
+    creator: b
+    rs-name: "$(kubectl -n ex-loops get rs -l app=loops -o jsonpath='{.items[0].metadata.name}')"

@@ -71,6 +71,7 @@ COPY --from=build --chown=node:node /repo/packages/auth-kit/dist ./packages/auth
 COPY --from=build --chown=node:node /repo/apps/ms-labs/package.json ./apps/ms-labs/
 COPY --from=build --chown=node:node /repo/apps/ms-labs/dist ./apps/ms-labs/dist
 COPY --chown=node:node content/labs ./content/labs
+COPY --chown=node:node content/exercises ./content/exercises
 
 USER node
 EXPOSE 3003

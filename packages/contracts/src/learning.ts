@@ -3,6 +3,7 @@
  * repo); these types describe what ms-learning serves about it and about a
  * user's progress through it.
  */
+import type { ExerciseSummaryDto } from './exercises';
 
 export type ExamDomainId =
   | 'cluster-architecture'
@@ -48,6 +49,8 @@ export interface CurriculumModule {
   lessons: CurriculumLesson[];
   labs: { id: string; title: string; type: LabType; difficulty: Difficulty; minutes: number }[];
   quizzes: { id: string; title: string; questions: number }[];
+  /** Exercises of the module's lessons and its challenges, in course order. */
+  exercises: ExerciseSummaryDto[];
   /** Sum of lesson + lab minutes. */
   minutes: number;
 }
@@ -264,6 +267,8 @@ export interface DashboardDto {
     lessonsPlanned: number;
     labsCompleted: number;
     labsTotal: number;
+    exercisesCompleted: number;
+    exercisesTotal: number;
     quizzesPassed: number;
     quizzesTotal: number;
   };

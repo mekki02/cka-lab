@@ -51,9 +51,11 @@ export const useLabSession = () => {
   const [interval, setIntervalMs] = useState(0);
   const q = useLabSessionQuery(undefined, { pollingInterval: interval, skipPollingIfUnfocused: true });
   const phase = q.data?.phase;
+  const exerciseLoading = q.data?.exercise?.state === 'Loading';
   useEffect(() => {
-    setIntervalMs(!q.data ? 0 : phase === 'Ready' || phase === 'Failed' ? 60_000 : 2_000);
-  }, [q.data, phase]);
+    const settled = (phase === 'Ready' || phase === 'Failed') && !exerciseLoading;
+    setIntervalMs(!q.data ? 0 : settled ? 60_000 : 2_000);
+  }, [q.data, phase, exerciseLoading]);
   return q;
 };
 
@@ -93,11 +95,16 @@ const SessionBar = ({ session }: { session: LabSessionDto }) => {
 export const LabEnvironment = ({
   labId,
   labTitle,
+  exercise,
   onTerminal,
+  onReader,
 }: {
   labId: string | null;
   labTitle?: string;
+  /** Playground started for an exercise: it is loaded as soon as the cluster is ready. */
+  exercise?: { id: string; title: string };
   onTerminal?: (paste: ((t: string) => void) | null) => void;
+  onReader?: (read: (() => string) | null) => void;
 }) => {
   const { data: session, isLoading, error } = useLabSession();
   const [start, startState] = useStartLabSessionMutation();
@@ -121,18 +128,27 @@ export const LabEnvironment = ({
     return frame(
       <Stack spacing={2} alignItems="center" justifyContent="center" sx={{ flex: 1, p: 4, textAlign: 'center', bgcolor: '#0d1117', color: '#e6edf3' }}>
         <TerminalIcon sx={{ fontSize: 48, color: 'secondary.main' }} />
-        <Typography variant="h6">{labId ? 'Do this lab in your browser' : 'Your Kubernetes playground'}</Typography>
+        <Typography variant="h6">
+          {labId ? 'Do this lab in your browser' : exercise ? 'Solve this exercise in your browser' : 'Your Kubernetes playground'}
+        </Typography>
         <Typography variant="body2" sx={{ maxWidth: 420, color: '#9da7b3' }}>
           {labId
             ? `You get a private cluster with ${labTitle ? `"${labTitle}"` : 'the lab'} already set up, a terminal with kubectl, and checks that verify your work.`
-            : 'An empty cluster where you are cluster-admin. Try anything — it is yours alone and deleted when you are done.'}
+            : exercise
+              ? 'Starts your playground cluster with this exercise already set up. Later exercises load into the same cluster in seconds.'
+              : 'An empty cluster where you are cluster-admin. Try anything — it is yours alone and deleted when you are done.'}
         </Typography>
         {other && (
           <Alert severity="info" variant="outlined" sx={{ color: 'inherit' }}>
             You have an environment running for {other}. Starting this one ends it.
           </Alert>
         )}
-        <Button variant="contained" size="large" onClick={() => start(labId ? { labId } : {})} disabled={startState.isLoading}>
+        <Button
+          variant="contained"
+          size="large"
+          onClick={() => start(labId ? { labId } : exercise ? { exerciseId: exercise.id } : {})}
+          disabled={startState.isLoading}
+        >
           {startState.isLoading ? 'Starting…' : 'Start environment'}
         </Button>
         {startState.error && <Alert severity="error">{errorMessage(startState.error)}</Alert>}
@@ -185,7 +201,7 @@ export const LabEnvironment = ({
       <SessionBar session={mine} />
       <Box sx={{ flex: 1, minHeight: 0, display: 'flex', p: 1, pt: 0 }}>
         <Suspense fallback={<LinearProgress sx={{ flex: 1, alignSelf: 'flex-start' }} />}>
-          <LabTerminal sessionId={mine.id} onReady={onTerminal} />
+          <LabTerminal sessionId={mine.id} onReady={onTerminal} onReader={onReader} />
         </Suspense>
       </Box>
     </>,

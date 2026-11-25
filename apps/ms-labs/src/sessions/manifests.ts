@@ -20,6 +20,8 @@ export interface SessionSpec {
   namespace: string;
   userId: string;
   labId: string | null;
+  /** Playground only: an exercise to load once the cluster is ready. */
+  exerciseId?: string | null;
   createdAt: Date;
   expiresAt: Date;
 }
@@ -60,6 +62,14 @@ export const namespaceManifest = (s: SessionSpec): KubernetesObject & { metadata
       [ANN.expiresAt]: s.expiresAt.toISOString(),
       [ANN.activeAt]: s.createdAt.toISOString(),
       [ANN.results]: '{}',
+      ...(s.exerciseId
+        ? {
+            [ANN.exercise]: s.exerciseId,
+            [ANN.exerciseState]: 'Loading',
+            [ANN.exerciseMessage]: 'Waiting for your cluster',
+            [ANN.exerciseLoadedAt]: s.createdAt.toISOString(),
+          }
+        : {}),
     },
   },
 });
@@ -167,8 +177,11 @@ export const sessionObjects = (s: SessionSpec, o: ManifestOptions): KubernetesOb
   return objects;
 };
 
+export const CHECKER_HOME = '/home/checker';
+export const STUDENT_HOME = '/home/student';
+
 export const toolboxPod = (s: SessionSpec, o: ManifestOptions): KubernetesObject => {
-  const container = (name: string, mem: string) => ({
+  const container = (name: string, mem: string, mounts: object[], extra: object = {}) => ({
     name,
     image: o.toolboxImage,
     imagePullPolicy: o.toolboxPullPolicy,
@@ -179,12 +192,20 @@ export const toolboxPod = (s: SessionSpec, o: ManifestOptions): KubernetesObject
       readOnlyRootFilesystem: true,
       capabilities: { drop: ['ALL'] },
     },
-    volumeMounts: [
-      { name: `${name}-home`, mountPath: '/home/student' },
-      { name: 'tmp', mountPath: '/tmp' },
-      { name: 'kubeconfig', mountPath: '/etc/cka/kube', readOnly: true },
-    ],
+    volumeMounts: [...mounts, { name: `${name}-tmp`, mountPath: '/tmp' }, { name: 'kubeconfig', mountPath: '/etc/cka/kube', readOnly: true }],
+    ...extra,
   });
+  // The checker reads the student's home (answer files, shell history) but
+  // cannot write to it, and has its own home for kubectl's cache.
+  const checker = container(
+    CHECKER_CONTAINER,
+    '256Mi',
+    [
+      { name: `${CHECKER_CONTAINER}-home`, mountPath: CHECKER_HOME },
+      { name: `${SHELL_CONTAINER}-home`, mountPath: STUDENT_HOME, readOnly: true },
+    ],
+    { env: [{ name: 'HOME', value: CHECKER_HOME }], workingDir: CHECKER_HOME },
+  );
   return {
     apiVersion: 'v1',
     kind: 'Pod',
@@ -202,11 +223,12 @@ export const toolboxPod = (s: SessionSpec, o: ManifestOptions): KubernetesObject
       },
       // Two containers, two filesystems: what the student does in `shell`
       // cannot change the binaries or files `checker` uses to grade them.
-      containers: [container(SHELL_CONTAINER, '512Mi'), container(CHECKER_CONTAINER, '256Mi')],
+      containers: [container(SHELL_CONTAINER, '512Mi', [{ name: `${SHELL_CONTAINER}-home`, mountPath: STUDENT_HOME }]), checker],
       volumes: [
         { name: `${SHELL_CONTAINER}-home`, emptyDir: { sizeLimit: '512Mi' } },
         { name: `${CHECKER_CONTAINER}-home`, emptyDir: { sizeLimit: '128Mi' } },
-        { name: 'tmp', emptyDir: { sizeLimit: '256Mi' } },
+        { name: `${SHELL_CONTAINER}-tmp`, emptyDir: { sizeLimit: '256Mi' } },
+        { name: `${CHECKER_CONTAINER}-tmp`, emptyDir: { sizeLimit: '64Mi' } },
         {
           name: 'kubeconfig',
           secret: { secretName: VCLUSTER_KUBECONFIG_SECRET, items: [{ key: 'config', path: 'config' }], defaultMode: 0o440 },

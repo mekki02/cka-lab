@@ -207,6 +207,77 @@ Labs with `environment.destructive: true` (node, kubelet, etcd, kubeadm work) ca
 
 YAML gotchas: quote any value containing `: ` or starting with a special character (`'…'`); prefer `|` blocks for Markdown.
 
+## Exercises (`content/exercises/<id>.yaml`)
+
+Exercises are the course's practice track: short tasks (5–20 minutes) on a real cluster, graded automatically, in a CodinGame-style page: **statement** on the left; **terminal**, **answer fields** and **test cases** on the right; **Validate** runs every test case. Each published lesson should have at least one exercise. Modules end with one or two **challenges** (`kind: challenge`, no `lesson`): harder and with fewer hints, combining the module's lessons.
+
+Exercises run in the student's **playground** cluster. Loading one takes seconds, not the minute a new cluster takes: ms-labs deletes the exercise's `namespaces`, recreates them empty, runs `setup`, and writes starter `files` to `~/<exercise id>/`. **Reset exercise** does the same again. So an exercise must keep everything it creates inside its own namespaces (prefix them `ex-`); anything cluster-scoped must be removed by `cleanup`.
+
+```yaml
+id: svc-answers-nothing             # kebab-case, unique across exercises
+title: "The Service that answers nothing"
+module: services
+lesson: services-fundamentals       # omit for a module challenge
+kind: exercise                      # exercise | challenge
+difficulty: beginner                # beginner | intermediate | advanced
+minutes: 10
+order: 2                            # position among the lesson's exercises
+tags: [troubleshooting, selectors]
+namespaces: [ex-broken]             # owned: deleted and recreated on every load
+setup: |                            # bash with `set -e`; kubectl = the student's cluster
+  kubectl -n ex-broken create deployment web --image=nginx:1.27 --replicas=2
+cleanup: |                          # optional: cluster-scoped leftovers (ClusterRoles, PVs)
+files:                              # optional starter files → ~/svc-answers-nothing/web.yaml
+  - { path: web.yaml, content: "…" }
+statement: |                        # Markdown; bash code blocks get a ▶ paste button
+  …
+inputs:                             # optional answer fields
+  - { id: cluster-ip, label: ClusterIP of the web Service, placeholder: 10.x.y.z }
+  - id: first-command
+    label: Which command shows the problem most directly?
+    kind: choice
+    options:
+      - { id: a, text: "`k get svc`" }
+      - { id: b, text: "`k get endpointslices …`" }
+checks: […]                         # the test cases, in display order — see below
+hints: [ "…", "…" ]                 # revealed one at a time
+solution: |                         # revealed on request (recorded in progress)
+  …
+autotest:                           # never served; used by scripts/test-exercises.mjs
+  solve: |                          # runs in the student's shell, as if typed
+    kubectl -n ex-broken patch svc web-broken …
+  answers: { first-command: b, cluster-ip: "$(kubectl -n ex-web get svc web -o jsonpath='{.spec.clusterIP}')" }
+```
+
+### Test cases (`checks`)
+
+Every check has an `id`, a `description` (what the student sees) and a `type`. The expected value is never sent to the browser.
+
+| `type` | Looks at | Fields |
+|---|---|---|
+| `cluster` | the output of a read-only command against the cluster | `command`, `expect`, `match` |
+| `answer` | what the student typed or chose in input `input` | `input`, `expect` **or** `expectCommand`, `match` (default `exact`), `caseSensitive` (default false) |
+| `file` | a file the student wrote under their home (`answers/pods.txt`) — the CKA's "save the output to …" | `path`, `expect` **or** `expectCommand`, `match` |
+| `history` | the student's shell history: did they run a matching command? | `expect` (a regular expression) |
+| `terminal` | what the student's terminal shows when they press Validate | `expect`, `match` (`contains` or `regex`) |
+
+`match` values: `exact` (trimmed), `contains`, `regex` (multiline), `lines` (same set of non-empty lines in any order — lists of names), `number`, and for `cluster` checks `success` (exit code 0; `expect` says what that proves).
+
+`expectCommand` makes the expected value depend on the student's cluster — a Pod IP, a generated ReplicaSet name, a node port: it runs at validation time, and its trimmed output is the expected value. A choice input's `expect` is an option id.
+
+**Choosing check types.** Grade the *result* in the cluster wherever you can (`cluster`). Use `answer` for understanding ("why did this fail?") and for values the student must find. Use `file` to practise the exam's output tasks. Use `history` for a habit that matters (`--dry-run=server`, reading EndpointSlices instead of the selector), and only as one test among several. `terminal` text is reported by the browser, so treat it as a teaching aid rather than proof; pair it with a `history` check.
+
+**Fixed in place?** To insist that a Service is patched rather than recreated, store its `uid` in a ConfigMap during setup and compare (see `svc-answers-nothing.yaml`).
+
+**Validation rule for publishing an exercise:** it must fail when loaded and pass after `autotest.solve`, on a real deployment:
+
+```bash
+CKA_URL=https://cka.localhost:9443 CKA_EMAIL=… CKA_PASSWORD=… KUBE_CONTEXT=kind-cka-platform \
+  node scripts/test-exercises.mjs [exercise-id …]
+```
+
+Then solve it once by hand in the browser, the way a student would.
+
 ## Quizzes (`content/quizzes/<id>.yaml`)
 
 ```yaml

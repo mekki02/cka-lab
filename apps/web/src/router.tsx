@@ -12,6 +12,8 @@ import { CheatSheetsPage } from '@/pages/CheatSheetsPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { ExamAttemptPage } from '@/pages/exams/ExamAttemptPage';
 import { ExamsPage } from '@/pages/exams/ExamsPage';
+import { ExercisePage } from '@/pages/exercises/ExercisePage';
+import { ExercisesPage } from '@/pages/exercises/ExercisesPage';
 import { LabPage } from '@/pages/labs/LabPage';
 import { LabsPage } from '@/pages/labs/LabsPage';
 import { PlaygroundPage } from '@/pages/labs/PlaygroundPage';
@@ -40,6 +42,8 @@ export const router = createBrowserRouter([
       { path: 'learn', element: <CoursePage /> },
       { path: 'learn/:moduleId', element: <ModulePage /> },
       { path: 'learn/:moduleId/:lessonId', element: <LessonPage /> },
+      { path: 'exercises', element: <ExercisesPage /> },
+      { path: 'exercises/:exerciseId', element: <ExercisePage /> },
       { path: 'labs', element: <LabsPage /> },
       { path: 'labs/:labId', element: <LabPage /> },
       ...(LABS_ENABLED ? [{ path: 'playground', element: <PlaygroundPage /> }] : []),

@@ -1,0 +1,105 @@
+id: kubectl-yaml-challenge
+title: "Challenge: fix the YAML, create what has no generator"
+module: exam-workflow
+kind: challenge
+difficulty: intermediate
+minutes: 15
+tags: [yaml, dry-run]
+namespaces: [ex-yaml]
+files:
+  - path: web.yaml
+    content: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: web
+        namespace: ex-yaml
+      spec:
+        replicas: 2
+        selector:
+          matchLabels:
+            app: web
+        template:
+          metadata:
+            labels:
+              app: frontend
+          spec:
+            containers:
+              - name: web
+                image: nginx:1.27
+                imagePullPolicy: Sometimes
+                ports:
+                  - containerPort: "80"
+statement: |
+  A colleague left you `~/kubectl-yaml-challenge/web.yaml`. It does not apply.
+
+  1. Make it apply **without changing what it is meant to do** (a Deployment `web` of two `nginx:1.27`
+     replicas in `ex-yaml`), and apply it. Let the API server find the problems for you before you
+     apply for real: `kubectl apply --dry-run=server` validates against the schema and admission
+     without creating anything.
+  2. There is no `kubectl create` generator for a PersistentVolumeClaim. Create a PVC `data` in
+     `ex-yaml` requesting `1Gi` with access mode `ReadWriteOnce` anyway — the fastest reliable way is
+     a minimal example from the documentation (allowed in the exam).
+
+  It does not matter whether the PVC is `Bound` or `Pending`; only its spec is checked.
+checks:
+  - id: web-ready
+    description: Deployment web has 2 ready nginx:1.27 replicas
+    type: cluster
+    command: kubectl -n ex-yaml get deploy web -o jsonpath='{.status.readyReplicas}|{.spec.template.spec.containers[0].image}'
+    expect: 2|nginx:1.27
+    match: exact
+  - id: web-labels
+    description: The selector and the Pod template labels agree on app=web
+    type: cluster
+    command: kubectl -n ex-yaml get deploy web -o jsonpath='{.spec.selector.matchLabels.app}/{.spec.template.metadata.labels.app}'
+    expect: web/web
+    match: exact
+  - id: pvc
+    description: PVC data requests 1Gi, ReadWriteOnce
+    type: cluster
+    command: kubectl -n ex-yaml get pvc data -o jsonpath='{.spec.resources.requests.storage}|{.spec.accessModes[*]}'
+    expect: 1Gi|ReadWriteOnce
+    match: exact
+  - id: server-dry-run
+    description: You validated a manifest with a server-side dry run
+    type: history
+    expect: '--dry-run=server'
+hints:
+  - "Run `k apply -f web.yaml --dry-run=server`, fix the first error it reports, repeat. There are three."
+  - "`imagePullPolicy` accepts `Always`, `IfNotPresent` or `Never`; `containerPort` is a number; `selector.matchLabels` must match the template's labels."
+solution: |
+  The three errors, in the order the API server reports them:
+
+  1. `containerPort: "80"` is a string; it must be the number `80`.
+  2. `imagePullPolicy: Sometimes` is not a valid value (`Always`, `IfNotPresent`, `Never`).
+  3. `selector.matchLabels` (`app: web`) does not match the template labels (`app: frontend`). Change the
+     template label to `web`: the selector of a Deployment is immutable once created, and `web` is the
+     intended name.
+
+  ```bash
+  cd ~/kubectl-yaml-challenge
+  vim web.yaml
+  k apply -f web.yaml --dry-run=server && k apply -f web.yaml
+  ```
+
+  ```yaml title="pvc.yaml"
+  apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: data
+    namespace: ex-yaml
+  spec:
+    accessModes: ["ReadWriteOnce"]
+    resources:
+      requests:
+        storage: 1Gi
+  ```
+autotest:
+  solve: |
+    cd ~/kubectl-yaml-challenge
+    sed -i -e 's/containerPort: "80"/containerPort: 80/' -e 's/Sometimes/IfNotPresent/' -e 's/app: frontend/app: web/' web.yaml
+    kubectl apply -f web.yaml --dry-run=server
+    kubectl apply -f web.yaml
+    printf '%s\n' 'apiVersion: v1' 'kind: PersistentVolumeClaim' 'metadata: {name: data, namespace: ex-yaml}' 'spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 1Gi}}}' | kubectl apply -f -
+    kubectl -n ex-yaml rollout status deploy web --timeout=120s

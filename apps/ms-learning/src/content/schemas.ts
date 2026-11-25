@@ -154,6 +154,171 @@ export const LabSchema = z
   })
   .strict();
 
+// --- exercises/*.yaml ------------------------------------------------------
+
+/**
+ * Comparison of a value the student produced with the expected one:
+ *   exact     equal after trimming
+ *   contains  includes the expected text
+ *   regex     matches the regular expression (multiline)
+ *   lines     same set of non-empty lines, in any order (lists of names)
+ *   number    numerically equal ("3" = "3.0")
+ *   success   cluster checks only: the command exits 0
+ * `answer` checks ignore case unless `caseSensitive: true`.
+ */
+export const EXERCISE_MATCHES = ['exact', 'contains', 'regex', 'lines', 'number', 'success'] as const;
+
+const exerciseCheckBase = { id, description: z.string().min(3) };
+/** A relative path under the student's home: `answers/pods.txt`. */
+const homePath = z
+  .string()
+  .regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/, 'a relative path inside the home directory, without ..');
+
+const validRegex = (ctx: z.RefinementCtx, checkId: string, expect: string | undefined) => {
+  if (expect === undefined) return;
+  try {
+    new RegExp(expect, 'm');
+  } catch {
+    ctx.addIssue({ code: 'custom', message: `${checkId}: expect is not a valid regular expression` });
+  }
+};
+
+export const ExerciseCheckSchema = z
+  .discriminatedUnion('type', [
+    z
+      .object({
+        ...exerciseCheckBase,
+        type: z.literal('cluster'),
+        command: z.string().min(1),
+        expect: z.string().min(1),
+        match: z.enum(['exact', 'contains', 'regex', 'lines', 'number', 'success']),
+      })
+      .strict(),
+    z
+      .object({
+        ...exerciseCheckBase,
+        type: z.literal('answer'),
+        /** The input (answer field) this check reads. */
+        input: id,
+        /** A fixed expected value, or… */
+        expect: z.string().min(1).optional(),
+        /** …a command whose output is the expected value (answers that depend on the cluster, e.g. a Pod IP). */
+        expectCommand: z.string().min(1).optional(),
+        match: z.enum(['exact', 'contains', 'regex', 'lines', 'number']).default('exact'),
+        caseSensitive: z.boolean().default(false),
+      })
+      .strict(),
+    z
+      .object({
+        ...exerciseCheckBase,
+        type: z.literal('file'),
+        path: homePath,
+        expect: z.string().min(1).optional(),
+        expectCommand: z.string().min(1).optional(),
+        match: z.enum(['exact', 'contains', 'regex', 'lines', 'number']).default('exact'),
+      })
+      .strict(),
+    z
+      .object({
+        ...exerciseCheckBase,
+        type: z.literal('history'),
+        /** A regular expression; passes when any command the student ran matches it. */
+        expect: z.string().min(1),
+      })
+      .strict(),
+    z
+      .object({
+        ...exerciseCheckBase,
+        type: z.literal('terminal'),
+        expect: z.string().min(1),
+        match: z.enum(['contains', 'regex']).default('contains'),
+      })
+      .strict(),
+  ])
+  .superRefine((c, ctx) => {
+    if ((c.type === 'answer' || c.type === 'file') && (c.expect === undefined) === (c.expectCommand === undefined)) {
+      ctx.addIssue({ code: 'custom', message: `${c.id}: set exactly one of expect or expectCommand` });
+    }
+    if (c.type === 'history' || ('match' in c && c.match === 'regex')) validRegex(ctx, c.id, c.expect);
+  });
+
+export const ExerciseInputSchema = z
+  .object({
+    id,
+    label: z.string().min(1),
+    kind: z.enum(['text', 'choice']).default('text'),
+    placeholder: z.string().optional(),
+    options: z
+      .array(z.object({ id: z.string().regex(/^[a-z]$/, 'option ids are single letters'), text: markdown }).strict())
+      .default([]),
+  })
+  .strict()
+  .superRefine((i, ctx) => {
+    if (i.kind === 'choice' && i.options.length < 2) ctx.addIssue({ code: 'custom', message: `${i.id}: a choice needs 2+ options` });
+    if (i.kind === 'text' && i.options.length) ctx.addIssue({ code: 'custom', message: `${i.id}: only choice inputs have options` });
+  });
+
+export const ExerciseSchema = z
+  .object({
+    id,
+    title: z.string().min(3),
+    module: id,
+    /** The lesson this exercise practises. Omit for a module-level challenge. */
+    lesson: id.optional(),
+    kind: z.enum(['exercise', 'challenge']),
+    difficulty: z.enum(['beginner', 'intermediate', 'advanced']),
+    minutes: z.number().int().positive().max(120),
+    /** Position among the exercises of the same lesson (or module challenges). */
+    order: z.number().int().default(100),
+    tags: z.array(z.string().min(1)).default([]),
+    /**
+     * Namespaces the exercise owns. Loading the exercise deletes them,
+     * recreates them empty, then runs `setup`; that is also how a reset works.
+     */
+    namespaces: z.array(id).default([]),
+    /** Shell commands (run with `set -e`, kubectl pointed at the student's cluster). */
+    setup: z.string().default(''),
+    /** Deletes what the exercise creates outside its namespaces (ClusterRoles, PVs). */
+    cleanup: z.string().optional(),
+    /** Starter files, written to ~/<exercise id>/<path> in the student's terminal. */
+    files: z.array(z.object({ path: homePath, content: z.string() }).strict()).default([]),
+    statement: markdown,
+    inputs: z.array(ExerciseInputSchema).default([]),
+    checks: z.array(ExerciseCheckSchema).min(1),
+    hints: z.array(markdown).default([]),
+    solution: markdown,
+    /**
+     * For `scripts/test-exercises.sh` only (never served): commands that
+     * solve the exercise and the answers to submit, so content is tested
+     * end to end on a real cluster.
+     */
+    autotest: z
+      .object({ solve: z.string().min(1), answers: z.record(z.string(), z.string()).default({}) })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .superRefine((e, ctx) => {
+    const inputs = new Map(e.inputs.map(i => [i.id, i]));
+    if (inputs.size !== e.inputs.length) ctx.addIssue({ code: 'custom', message: 'duplicate input ids' });
+    if (new Set(e.checks.map(c => c.id)).size !== e.checks.length) ctx.addIssue({ code: 'custom', message: 'duplicate check ids' });
+    for (const c of e.checks) {
+      if (c.type !== 'answer') continue;
+      const input = inputs.get(c.input);
+      if (!input) {
+        ctx.addIssue({ code: 'custom', message: `${c.id}: unknown input "${c.input}"` });
+      } else if (input.kind === 'choice' && (c.expect === undefined || !input.options.some(o => o.id === c.expect))) {
+        ctx.addIssue({ code: 'custom', message: `${c.id}: a choice answer must expect one of the option ids` });
+      }
+    }
+    for (const i of e.inputs) {
+      if (!e.checks.some(c => c.type === 'answer' && c.input === i.id)) {
+        ctx.addIssue({ code: 'custom', message: `input "${i.id}" is not checked by any answer check` });
+      }
+    }
+    if (e.kind === 'exercise' && !e.lesson) ctx.addIssue({ code: 'custom', message: 'an exercise needs a lesson (only challenges are module-level)' });
+  });
+
 // --- quizzes/*.yaml --------------------------------------------------------
 
 export const QuestionSchema = z
@@ -268,6 +433,8 @@ export const CheatsheetSchema = z
 
 export type CurriculumFile = z.infer<typeof CurriculumSchema>;
 export type Lab = z.infer<typeof LabSchema>;
+export type Exercise = z.infer<typeof ExerciseSchema>;
+export type ExerciseCheck = z.infer<typeof ExerciseCheckSchema>;
 export type Quiz = z.infer<typeof QuizSchema>;
 export type Question = z.infer<typeof QuestionSchema>;
 export type Exam = z.infer<typeof ExamSchema>;

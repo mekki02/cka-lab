@@ -1,0 +1,73 @@
+id: kubectl-rbac-generators
+title: "Least privilege with two commands"
+module: exam-workflow
+lesson: kubectl-essentials
+kind: exercise
+difficulty: beginner
+minutes: 8
+order: 2
+tags: [imperative, rbac]
+namespaces: [ex-rbac]
+setup: |
+  kubectl -n ex-rbac create serviceaccount inspector
+  kubectl -n ex-rbac create deployment web --image=nginx:1.27
+statement: |
+  A monitoring tool runs as the ServiceAccount `inspector` in namespace `ex-rbac`. It must be able to
+  **read** Pods in that namespace — `get`, `list` and `watch` — and nothing else.
+
+  1. Create a Role `pod-reader` with exactly those verbs on Pods.
+  2. Bind it to the ServiceAccount with a RoleBinding.
+  3. Prove it with `kubectl auth can-i … --as=system:serviceaccount:ex-rbac:inspector`, then answer below.
+
+  Both objects have generators: you should not need an editor.
+inputs:
+  - id: other-ns
+    label: "`kubectl auth can-i list pods -n default --as=system:serviceaccount:ex-rbac:inspector` answers…"
+    kind: choice
+    options:
+      - { id: a, text: "`yes` — the ServiceAccount can now read Pods" }
+      - { id: b, text: "`no` — a Role only grants access in its own namespace" }
+checks:
+  - id: can-list
+    description: inspector can list and watch Pods in ex-rbac
+    type: cluster
+    command: |
+      for v in get list watch; do kubectl auth can-i "$v" pods -n ex-rbac --as=system:serviceaccount:ex-rbac:inspector; done | tr '\n' ' '
+    expect: yes yes yes
+    match: exact
+  - id: cannot-delete
+    description: inspector cannot delete Pods or read Deployments (least privilege)
+    type: cluster
+    command: |
+      { kubectl auth can-i delete pods -n ex-rbac --as=system:serviceaccount:ex-rbac:inspector; kubectl auth can-i list deployments -n ex-rbac --as=system:serviceaccount:ex-rbac:inspector; } | tr '\n' ' '; true
+    expect: no no
+    match: exact
+  - id: role-name
+    description: The access comes from a Role named pod-reader, bound to the ServiceAccount
+    type: cluster
+    command: kubectl -n ex-rbac get rolebindings -o jsonpath='{range .items[*]}{.roleRef.kind}/{.roleRef.name} {.subjects[*].kind}/{.subjects[*].name}{"\n"}{end}'
+    expect: Role/pod-reader ServiceAccount/inspector
+    match: contains
+  - id: scope
+    description: You know where a Role applies
+    type: answer
+    input: other-ns
+    expect: b
+hints:
+  - "`k -n ex-rbac create role pod-reader --verb=get,list,watch --resource=pods`"
+  - "`k -n ex-rbac create rolebinding … --role=pod-reader --serviceaccount=ex-rbac:inspector` — note the `namespace:name` form."
+solution: |
+  ```bash
+  k -n ex-rbac create role pod-reader --verb=get,list,watch --resource=pods
+  k -n ex-rbac create rolebinding pod-reader --role=pod-reader --serviceaccount=ex-rbac:inspector
+  k auth can-i list pods -n ex-rbac --as=system:serviceaccount:ex-rbac:inspector     # yes
+  k auth can-i list pods -n default --as=system:serviceaccount:ex-rbac:inspector     # no
+  ```
+
+  A Role and its RoleBinding live in one namespace and grant access only there. Access in every namespace
+  needs a ClusterRole bound with a ClusterRoleBinding.
+autotest:
+  solve: |
+    kubectl -n ex-rbac create role pod-reader --verb=get,list,watch --resource=pods
+    kubectl -n ex-rbac create rolebinding pod-reader --role=pod-reader --serviceaccount=ex-rbac:inspector
+  answers: { other-ns: b }

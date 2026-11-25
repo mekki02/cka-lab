@@ -1,0 +1,150 @@
+id: services-challenge-wiring
+title: "Challenge: the shop cannot reach its orders API"
+module: services
+kind: challenge
+difficulty: advanced
+minutes: 20
+tags: [troubleshooting, configmap, named-ports]
+namespaces: [ex-front, ex-back]
+setup: |
+  cat <<'YAML' | kubectl apply -f -
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata: { name: orders, namespace: ex-back }
+  spec:
+    replicas: 2
+    selector: { matchLabels: { app: orders } }
+    template:
+      metadata: { labels: { app: orders } }
+      spec:
+        containers:
+          - name: orders
+            image: registry.k8s.io/e2e-test-images/agnhost:2.53
+            args: ["netexec", "--http-port=8080"]
+            ports:
+              - { name: http-api, containerPort: 8080 }
+            readinessProbe:
+              httpGet: { path: /healthz, port: http-api }
+  ---
+  apiVersion: v1
+  kind: Service
+  metadata: { name: orders, namespace: ex-back }
+  spec:
+    selector: { app: orders }
+    ports:
+      - { name: http, port: 80, targetPort: http }
+  ---
+  apiVersion: v1
+  kind: ConfigMap
+  metadata: { name: shop-config, namespace: ex-front }
+  data:
+    ORDERS_URL: http://orders:8080/hostname
+  ---
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata: { name: shop, namespace: ex-front }
+  spec:
+    replicas: 1
+    selector: { matchLabels: { app: shop } }
+    template:
+      metadata: { labels: { app: shop } }
+      spec:
+        containers:
+          - name: shop
+            image: busybox:1.36
+            envFrom:
+              - configMapRef: { name: shop-config }
+            command: ["sh", "-c"]
+            args:
+              - |
+                while true; do
+                  if out=$(wget -qO- -T 2 "$ORDERS_URL" 2>&1); then echo "OK $out"; else echo "FAIL $ORDERS_URL: $out"; fi
+                  sleep 2
+                done
+  YAML
+  kubectl -n ex-back rollout status deploy orders --timeout=180s
+  kubectl -n ex-front rollout status deploy shop --timeout=180s
+statement: |
+  The `shop` (namespace `ex-front`) calls the `orders` API (namespace `ex-back`) every two seconds and
+  logs the result:
+
+  ```bash
+  k -n ex-front logs deploy/shop --tail=3
+  ```
+
+  Every line says `FAIL`. Make the shop's log say `OK orders-…`. Rules, as in a real cluster:
+
+  - The `orders` **Deployment** is owned by another team: fix the problem on the Service side.
+  - The shop's code reads its target from the ConfigMap `shop-config`; do not hard-code anything in the
+    shop's Deployment.
+
+  There is more than one fault, and they hide each other.
+inputs:
+  - id: restart
+    label: You fixed the ConfigMap, but the shop keeps logging the old URL. Why?
+    kind: choice
+    options:
+      - { id: a, text: The kubelet caches ConfigMaps for an hour }
+      - { id: b, text: Environment variables are read when the container starts; the Pods must be restarted }
+      - { id: c, text: ConfigMaps cannot be edited; it must be recreated }
+      - { id: d, text: The ConfigMap is in the wrong namespace }
+checks:
+  - id: orders-endpoints
+    description: The orders Service has 2 ready endpoints with a port
+    type: cluster
+    command: kubectl -n ex-back get endpointslices -l kubernetes.io/service-name=orders -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.addresses[0]}{"\n"}{end}' 2>/dev/null | grep -c .
+    expect: "2"
+    match: number
+  - id: orders-deploy-untouched
+    description: The orders Deployment still names its port http-api
+    type: cluster
+    command: kubectl -n ex-back get deploy orders -o jsonpath='{.spec.template.spec.containers[0].ports[0].name}'
+    expect: http-api
+    match: exact
+  - id: config
+    description: shop-config points at orders in ex-back, through the Service port
+    type: cluster
+    command: kubectl -n ex-front get configmap shop-config -o jsonpath='{.data.ORDERS_URL}'
+    expect: ^http://orders\.ex-back(\.svc(\.cluster\.local)?)?(:80)?/hostname$
+    match: regex
+  - id: shop-ok
+    description: The shop's latest log line is OK
+    type: cluster
+    # The newest Pod: right after a restart, deploy/shop may still pick the terminating one.
+    command: kubectl -n ex-front logs "$(kubectl -n ex-front get pods -l app=shop --sort-by=.metadata.creationTimestamp -o name | tail -1)" --tail=1
+    expect: ^OK orders-[a-z0-9]+-[a-z0-9]+$
+    match: regex
+  - id: restart
+    description: You know when configuration is read
+    type: answer
+    input: restart
+    expect: b
+solution: |
+  Three faults:
+
+  1. **Named targetPort:** the Service forwards to the port named `http`, but the container names it
+     `http-api`. A named `targetPort` that no container port has gives endpoints **without** that port —
+     the Service has no usable backends.
+  2. **Cross-namespace name:** `orders` resolves in the *client's* namespace (`ex-front`). It must be
+     `orders.ex-back`.
+  3. **Port:** `8080` is the container port; clients call the **Service** port, `80`.
+
+  ```bash
+  k -n ex-back patch svc orders --type=json -p '[{"op":"replace","path":"/spec/ports/0/targetPort","value":"http-api"}]'
+  k -n ex-front patch configmap shop-config -p '{"data":{"ORDERS_URL":"http://orders.ex-back/hostname"}}'
+  k -n ex-front rollout restart deploy shop
+  k -n ex-front rollout status deploy shop
+  k -n ex-front logs deploy/shop --tail=3
+  ```
+
+  The restart is needed because `envFrom` copies values into the environment at container start. (A
+  ConfigMap mounted as a **volume** is updated in place after a short delay; environment variables never
+  are.)
+autotest:
+  solve: |
+    kubectl -n ex-back patch svc orders --type=json -p '[{"op":"replace","path":"/spec/ports/0/targetPort","value":"http-api"}]'
+    kubectl -n ex-front patch configmap shop-config -p '{"data":{"ORDERS_URL":"http://orders.ex-back/hostname"}}'
+    kubectl -n ex-front rollout restart deploy shop
+    kubectl -n ex-front rollout status deploy shop --timeout=120s
+    sleep 6
+  answers: { restart: b }

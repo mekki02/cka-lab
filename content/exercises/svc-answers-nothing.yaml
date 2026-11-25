@@ -1,0 +1,89 @@
+id: svc-answers-nothing
+title: "The Service that answers nothing"
+module: services
+lesson: services-fundamentals
+kind: exercise
+difficulty: beginner
+minutes: 10
+order: 2
+tags: [troubleshooting, selectors]
+namespaces: [ex-broken]
+setup: |
+  kubectl -n ex-broken create deployment web --image=nginx:1.27 --replicas=2
+  cat <<'YAML' | kubectl apply -f -
+  apiVersion: v1
+  kind: Service
+  metadata: { name: web-broken, namespace: ex-broken }
+  spec:
+    selector: { app: Web }
+    ports:
+      - port: 80
+        targetPort: 8080
+  YAML
+  kubectl -n ex-broken run client --image=busybox:1.36 --restart=Never -- sleep 36000
+  kubectl -n ex-broken create configmap original --from-literal=uid="$(kubectl -n ex-broken get svc web-broken -o jsonpath='{.metadata.uid}')"
+  kubectl -n ex-broken rollout status deployment web --timeout=180s
+statement: |
+  In `ex-broken`, the `client` Pod cannot reach the nginx Pods through the Service `web-broken`:
+
+  ```bash
+  k -n ex-broken exec client -- wget -qO- -T 3 web-broken
+  ```
+
+  It times out. There are **two** independent mistakes in the Service. Find them and fix the Service
+  **in place** — do not delete and recreate it (in production, other teams may reference its ClusterIP).
+inputs:
+  - id: first-command
+    label: Which command shows the first problem most directly?
+    kind: choice
+    options:
+      - { id: a, text: "`k -n ex-broken get svc web-broken`" }
+      - { id: b, text: "`k -n ex-broken get endpointslices -l kubernetes.io/service-name=web-broken`" }
+      - { id: c, text: "`k -n ex-broken logs deploy/web`" }
+      - { id: d, text: "`k get nodes`" }
+checks:
+  - id: endpoints
+    description: web-broken has 2 ready endpoints
+    type: cluster
+    command: kubectl -n ex-broken get endpointslices -l kubernetes.io/service-name=web-broken -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.addresses[0]}{"\n"}{end}' 2>/dev/null | grep -c .
+    expect: "2"
+    match: number
+  - id: reachable
+    description: The client gets the nginx page through web-broken
+    type: cluster
+    command: kubectl -n ex-broken exec client -- wget -qO- -T 3 web-broken
+    expect: Welcome to nginx!
+    match: contains
+  - id: in-place
+    description: The Service was fixed in place, not recreated
+    type: cluster
+    command: '[ "$(kubectl -n ex-broken get svc web-broken -o jsonpath={.metadata.uid})" = "$(kubectl -n ex-broken get configmap original -o jsonpath={.data.uid})" ]'
+    expect: same uid as at the start
+    match: success
+  - id: first-command
+    description: You know where to look first
+    type: answer
+    input: first-command
+    expect: b
+hints:
+  - A Service is only as good as its endpoints. Are there any?
+  - "Compare the selector with `k -n ex-broken get pods --show-labels`. Label values are case-sensitive."
+  - Once endpoints appear, does nginx listen on the port the Service forwards to?
+solution: |
+  1. **Selector:** `app: Web` matches no Pod; the Pods are labelled `app=web` (case matters). No endpoints.
+  2. **targetPort:** `8080`, but nginx listens on `80`. With endpoints present, connections are refused.
+
+  ```bash
+  k -n ex-broken get endpointslices -l kubernetes.io/service-name=web-broken   # no endpoints
+  k -n ex-broken patch svc web-broken -p '{"spec":{"selector":{"app":"web"}}}'
+  k -n ex-broken patch svc web-broken --type=json -p '[{"op":"replace","path":"/spec/ports/0/targetPort","value":80}]'
+  k -n ex-broken exec client -- wget -qO- -T 3 web-broken | head -4
+  ```
+
+  Rule of thumb: **no endpoints → selector or readiness; endpoints but refused → ports.**
+autotest:
+  solve: |
+    kubectl -n ex-broken patch svc web-broken -p '{"spec":{"selector":{"app":"web"}}}'
+    kubectl -n ex-broken patch svc web-broken --type=json -p '[{"op":"replace","path":"/spec/ports/0/targetPort","value":80}]'
+    sleep 3
+  answers: { first-command: b }

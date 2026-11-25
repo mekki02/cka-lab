@@ -287,7 +287,6 @@ metadata:
     app.kubernetes.io/instance: cka-lab
     app.kubernetes.io/version: "0.1.0"
     app.kubernetes.io/name: ms-identity
-    app.kubernetes.io/instance: cka-lab
 spec:
   replicas: 2
   revisionHistoryLimit: 5
@@ -305,7 +304,6 @@ spec:
         app.kubernetes.io/instance: cka-lab
         app.kubernetes.io/version: "0.1.0"
         app.kubernetes.io/name: ms-identity
-        app.kubernetes.io/instance: cka-lab
       annotations:
         # Roll the Pods when the signing key Secret changes.
         checksum/jwt-key-id: be2974546978
@@ -413,7 +411,6 @@ metadata:
     app.kubernetes.io/instance: cka-lab
     app.kubernetes.io/version: "0.1.0"
     app.kubernetes.io/name: ms-learning
-    app.kubernetes.io/instance: cka-lab
 spec:
   replicas: 2
   revisionHistoryLimit: 5
@@ -431,7 +428,6 @@ spec:
         app.kubernetes.io/instance: cka-lab
         app.kubernetes.io/version: "0.1.0"
         app.kubernetes.io/name: ms-learning
-        app.kubernetes.io/instance: cka-lab
     spec:
       automountServiceAccountToken: false   # the apps never call the Kubernetes API
       securityContext:
@@ -528,7 +524,6 @@ metadata:
     app.kubernetes.io/instance: cka-lab
     app.kubernetes.io/version: "0.1.0"
     app.kubernetes.io/name: web
-    app.kubernetes.io/instance: cka-lab
 spec:
   replicas: 2
   revisionHistoryLimit: 5
@@ -546,7 +541,6 @@ spec:
         app.kubernetes.io/instance: cka-lab
         app.kubernetes.io/version: "0.1.0"
         app.kubernetes.io/name: web
-        app.kubernetes.io/instance: cka-lab
     spec:
       automountServiceAccountToken: false   # the apps never call the Kubernetes API
       securityContext:
@@ -637,7 +631,6 @@ spec:
         app.kubernetes.io/instance: cka-lab
         app.kubernetes.io/version: "0.1.0"
         app.kubernetes.io/name: postgresql
-        app.kubernetes.io/instance: cka-lab
     spec:
       securityContext:
         runAsNonRoot: true

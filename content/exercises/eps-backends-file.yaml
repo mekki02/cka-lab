@@ -1,0 +1,70 @@
+id: eps-backends-file
+title: "Name the backends of a Service, from its EndpointSlices"
+module: services
+lesson: endpointslices
+kind: exercise
+difficulty: intermediate
+minutes: 10
+order: 2
+tags: [endpointslices, jsonpath, output]
+namespaces: [ex-backends]
+setup: |
+  cat <<'YAML' | kubectl apply -f -
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata: { name: web, namespace: ex-backends }
+  spec:
+    replicas: 3
+    selector: { matchLabels: { app: web } }
+    template:
+      metadata: { labels: { app: web, tier: front } }
+      spec:
+        containers:
+          - name: web
+            image: nginx:1.27
+            readinessProbe:
+              exec: { command: ["cat", "/tmp/ready"] }
+              periodSeconds: 2
+  YAML
+  kubectl -n ex-backends expose deployment web --port=80
+  # `kubectl wait -l` fails if the ReplicaSet has not created the Pods yet.
+  timeout 120 bash -c 'until [ "$(kubectl -n ex-backends get pods -l app=web -o name | wc -l)" -ge 3 ]; do sleep 1; done'
+  kubectl -n ex-backends wait --for=jsonpath='{.status.phase}'=Running pod -l app=web --timeout=180s
+  for p in $(kubectl -n ex-backends get pods -l app=web -o jsonpath='{.items[0].metadata.name} {.items[1].metadata.name}'); do
+    kubectl -n ex-backends exec "$p" -- touch /tmp/ready
+  done
+statement: |
+  The Service `web` in `ex-backends` selects three Pods, but only some of them are ready.
+
+  Write the names of the Pods **currently receiving traffic** from `web`, one per line, to
+  `~/answers/backends.txt`. Use the Service's **EndpointSlices**, not its selector: the slices are the
+  truth kube-proxy acts on, and they also work for Services without a selector.
+checks:
+  - id: backends-file
+    description: ~/answers/backends.txt lists exactly the ready backends
+    type: file
+    path: answers/backends.txt
+    expectCommand: kubectl -n ex-backends get pods -l app=web -o jsonpath='{range .items[*]}{.metadata.name} {.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | awk '$2=="True"{print $1}'
+    match: lines
+  - id: used-slices
+    description: You read the EndpointSlices
+    type: history
+    expect: endpointslices?\b
+hints:
+  - "Each slice has `endpoints[]`, each with `conditions.ready` and `targetRef.name` (the Pod)."
+  - "A JSONPath filter keeps matching items: `endpoints[?(@.conditions.ready==true)]`."
+solution: |
+  ```bash
+  k -n ex-backends get endpointslices -l kubernetes.io/service-name=web \
+    -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.targetRef.name}{"\n"}{end}' \
+    > ~/answers/backends.txt
+  cat ~/answers/backends.txt
+  ```
+
+  The label `kubernetes.io/service-name` ties each slice to its Service; the filter keeps only endpoints
+  that receive traffic.
+autotest:
+  solve: |
+    sleep 6
+    mkdir -p ~/answers
+    kubectl -n ex-backends get endpointslices -l kubernetes.io/service-name=web -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.targetRef.name}{"\n"}{end}' > ~/answers/backends.txt

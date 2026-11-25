@@ -4,8 +4,10 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { CurrentUser } from '@cka/auth-kit';
 import type { AuthenticatedUser, DashboardDto } from '@cka/contracts';
 import { AssessmentsController } from './assessments/assessments.controller';
-import { ExamAttempt, LabProgress, QuizAttempt } from './assessments/assessment.entities';
+import { ExamAttempt, ExerciseProgress, LabProgress, QuizAttempt } from './assessments/assessment.entities';
 import { ExamsService } from './assessments/exams.service';
+import { ExercisesController } from './assessments/exercises.controller';
+import { ExercisesService } from './assessments/exercises.service';
 import { LabsService } from './assessments/labs.service';
 import { QuizzesService } from './assessments/quizzes.service';
 import { ContentService } from './content/content.service';
@@ -26,8 +28,8 @@ class DashboardController {
 }
 
 @Module({
-  imports: [TypeOrmModule.forFeature([LessonProgress, LessonVisit, Bookmark, LabProgress, QuizAttempt, ExamAttempt])],
-  controllers: [ProgressController, AssessmentsController, DashboardController],
-  providers: [ContentService, ProgressService, LabsService, QuizzesService, ExamsService, DashboardService],
+  imports: [TypeOrmModule.forFeature([LessonProgress, LessonVisit, Bookmark, LabProgress, QuizAttempt, ExamAttempt, ExerciseProgress])],
+  controllers: [ProgressController, AssessmentsController, ExercisesController, DashboardController],
+  providers: [ContentService, ProgressService, LabsService, ExercisesService, QuizzesService, ExamsService, DashboardService],
 })
 export class LearningModule {}

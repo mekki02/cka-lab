@@ -1,13 +1,16 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, Post } from '@nestjs/common';
-import { ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
-import { IsOptional, Matches } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
+import { IsObject, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 import { CurrentUser } from '@cka/auth-kit';
 import type {
   AuthenticatedUser,
   CheckResultDto,
+  ExerciseValidationDto,
   LabSessionDto,
+  LoadExerciseRequest,
   LabsInfoDto,
   StartLabSessionRequest,
+  ValidateExerciseRequest,
   VerifyResultDto,
 } from '@cka/contracts';
 import { ChecksService } from '../checks/checks.service';
@@ -21,6 +24,22 @@ class StartSessionDto implements StartLabSessionRequest {
   @IsOptional()
   @Matches(ID)
   labId?: string;
+
+  @ApiPropertyOptional({ description: 'Playground only: an exercise to load when ready' })
+  @IsOptional()
+  @Matches(ID)
+  exerciseId?: string;
+}
+
+class LoadExerciseDto implements LoadExerciseRequest {
+  @ApiProperty() @Matches(ID) exerciseId: string;
+}
+
+class ValidateExerciseDto implements ValidateExerciseRequest {
+  @ApiProperty() @Matches(ID) exerciseId: string;
+  @ApiPropertyOptional() @IsOptional() @IsObject() answers?: Record<string, string>;
+  /** The browser sends the recent terminal text; capped well above what checks need. */
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(200_000) terminal?: string;
 }
 
 /** One session per user, so every route is about "my session": no ids to guess. */
@@ -51,7 +70,7 @@ export class SessionsController {
   @Post('session')
   @HttpCode(202)
   start(@CurrentUser() u: AuthenticatedUser, @Body() dto: StartSessionDto): Promise<LabSessionDto> {
-    return this.sessions.start(u.id, dto.labId ?? null);
+    return this.sessions.start(u.id, dto.labId ?? null, dto.exerciseId ?? null);
   }
 
   @Post('session/restart')
@@ -76,5 +95,23 @@ export class SessionsController {
   @HttpCode(200)
   verify(@CurrentUser() u: AuthenticatedUser): Promise<VerifyResultDto> {
     return this.checks.verify(u.id);
+  }
+
+  /** Loads an exercise into the playground, or reloads it (its reset). */
+  @Post('session/exercise')
+  @HttpCode(202)
+  loadExercise(@CurrentUser() u: AuthenticatedUser, @Body() dto: LoadExerciseDto): Promise<LabSessionDto> {
+    return this.sessions.loadExercise(u.id, dto.exerciseId);
+  }
+
+  @Post('session/exercise/validate')
+  @HttpCode(200)
+  validateExercise(@CurrentUser() u: AuthenticatedUser, @Body() dto: ValidateExerciseDto): Promise<ExerciseValidationDto> {
+    const answers = Object.fromEntries(
+      Object.entries(dto.answers ?? {})
+        .slice(0, 50)
+        .filter(([k, v]) => ID.test(k) && typeof v === 'string'),
+    );
+    return this.checks.validateExercise(u.id, { exerciseId: dto.exerciseId, answers, terminal: dto.terminal });
   }
 }

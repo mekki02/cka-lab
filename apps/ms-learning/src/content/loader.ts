@@ -7,11 +7,13 @@ import {
   CurriculumSchema,
   EXAM_DOMAIN_IDS,
   ExamSchema,
+  ExerciseSchema,
   LabSchema,
   QuizSchema,
   type Cheatsheet,
   type CurriculumFile,
   type Exam,
+  type Exercise,
   type Lab,
   type Quiz,
 } from './schemas';
@@ -19,6 +21,7 @@ import {
 export interface ContentBundle {
   curriculum: CurriculumFile;
   labs: Map<string, Lab>;
+  exercises: Map<string, Exercise>;
   quizzes: Map<string, Quiz>;
   exams: Map<string, Exam>;
   cheatsheets: Cheatsheet[];
@@ -79,6 +82,7 @@ export const loadContent = (contentDir: string): ContentBundle => {
   const problems: string[] = [];
   const curriculum = parseFile(join(contentDir, 'curriculum.yaml'), CurriculumSchema, problems);
   const labs = collect(join(contentDir, 'labs'), LabSchema, problems);
+  const exercises = collect(join(contentDir, 'exercises'), ExerciseSchema, problems);
   const quizzes = collect(join(contentDir, 'quizzes'), QuizSchema, problems);
   const exams = collect(join(contentDir, 'exams'), ExamSchema, problems);
   const cheatsheets = [...collect(join(contentDir, 'cheatsheets'), CheatsheetSchema, problems).values()].sort(
@@ -133,8 +137,15 @@ export const loadContent = (contentDir: string): ContentBundle => {
     };
     labs.forEach(l => checkModule('lab', l.id, l.module));
     quizzes.forEach(q => checkModule('quiz', q.id, q.module));
+    const lessonModule = new Map(curriculum.modules.flatMap(m => m.lessons.map(l => [l.id, m.id] as const)));
+    exercises.forEach(e => {
+      checkModule('exercise', e.id, e.module);
+      if (e.lesson && lessonModule.get(e.lesson) !== e.module) {
+        problems.push(`exercise "${e.id}": lesson "${e.lesson}" is not a lesson of module "${e.module}"`);
+      }
+    });
   }
 
   if (problems.length > 0 || !curriculum) throw new ContentError(problems);
-  return { curriculum, labs, quizzes, exams, cheatsheets };
+  return { curriculum, labs, exercises, quizzes, exams, cheatsheets };
 };

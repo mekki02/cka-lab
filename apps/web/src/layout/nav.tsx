@@ -8,6 +8,7 @@ import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import BookmarkBorderIcon from '@mui/icons-material/BookmarkBorder';
 import PeopleOutlineIcon from '@mui/icons-material/PeopleOutline';
 import TerminalIcon from '@mui/icons-material/Terminal';
+import FitnessCenterIcon from '@mui/icons-material/FitnessCenter';
 import { LABS_ENABLED } from '@/config';
 import type { Role } from '@cka/contracts';
 
@@ -26,6 +27,7 @@ export const NAV_SECTIONS: { title?: string; items: NavItem[] }[] = [
     items: [
       { label: 'Dashboard', to: '/', icon: <DashboardOutlinedIcon /> },
       { label: 'Course', to: '/learn', icon: <SchoolOutlinedIcon />, prefix: true },
+      { label: 'Exercises', to: '/exercises', icon: <FitnessCenterIcon />, prefix: true },
       { label: 'Labs', to: '/labs', icon: <ScienceOutlinedIcon />, prefix: true },
       ...(LABS_ENABLED ? [{ label: 'Playground', to: '/playground', icon: <TerminalIcon /> }] : []),
       { label: 'Quizzes', to: '/quizzes', icon: <QuizOutlinedIcon />, prefix: true },

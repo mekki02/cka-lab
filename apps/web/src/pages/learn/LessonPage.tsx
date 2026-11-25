@@ -33,6 +33,8 @@ import { useCurriculum, useProgressIndex } from '@/hooks/useCurriculum';
 import { mdxComponents } from '@/lessons/mdx-components';
 import { useTerminalDockOpen } from '@/labs/terminalBridge';
 import { StatusIcon } from './ModulePage';
+import { ExerciseList } from '@/pages/exercises/ExerciseList';
+import FitnessCenterIcon from '@mui/icons-material/FitnessCenter';
 
 type MdxContent = ComponentType<{ components?: object }>;
 
@@ -113,6 +115,7 @@ export const LessonPage = () => {
   const status = progress.status.get(lesson.id);
   const completed = status === 'COMPLETED';
   const bookmarked = progress.bookmarks.has(lesson.id);
+  const practice = m.exercises.filter(e => e.lessonId === lesson.id);
   const unmetPrereqs = lesson.prerequisites
     .map(p => index.lessons.get(p))
     .filter(p => p && p.status === 'published' && progress.status.get(p.id) !== 'COMPLETED');
@@ -181,6 +184,7 @@ export const LessonPage = () => {
         </Typography>
         <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
           <Chip size="small" icon={<ScheduleIcon />} label={`${lesson.minutes} min`} />
+          {practice.length > 0 && <Chip size="small" icon={<FitnessCenterIcon />} label={`${practice.length} exercise${practice.length > 1 ? 's' : ''}`} />}
           {completed && <Chip size="small" color="success" icon={<CheckCircleIcon />} label="Completed" />}
         </Stack>
 
@@ -215,8 +219,23 @@ export const LessonPage = () => {
           </Box>
         )}
 
+        {published && body.Body && practice.length > 0 && (
+          <Card sx={{ mt: 6, p: { xs: 2, md: 3 }, borderTop: 4, borderTopColor: 'secondary.main' }}>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <FitnessCenterIcon color="secondary" />
+              <Typography variant="h5" component="h2">
+                Practise on a real cluster
+              </Typography>
+            </Stack>
+            <Typography color="text.secondary" sx={{ mt: 1, mb: 1 }}>
+              Each exercise sets up its own starting state in your playground and is graded automatically.
+            </Typography>
+            <ExerciseList exercises={practice} />
+          </Card>
+        )}
+
         {published && body.Body && (
-          <Card sx={{ mt: 6, p: 3, textAlign: 'center' }}>
+          <Card sx={{ mt: practice.length ? 3 : 6, p: 3, textAlign: 'center' }}>
             {completed ? (
               <Stack spacing={1} alignItems="center">
                 <Typography fontWeight={600}>Lesson completed</Typography>

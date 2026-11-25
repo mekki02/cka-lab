@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -10,6 +11,8 @@ import {
 import type { V1Namespace, V1Pod } from '@kubernetes/client-node';
 import type { CheckResultDto, LabSessionDto, LabSessionPhase } from '@cka/contracts';
 import { Env } from '../config/env';
+import { exerciseClusterScript, exerciseHomeScript, studentFile } from '../checks/exercise-grading';
+import { loadExercises, type RunnableExercise } from '../content/exercises';
 import { loadLabs, type RunnableLab } from '../content/labs';
 import { isNotFound, KubeService } from '../kube/kube.service';
 import { namespaceManifest, sessionObjects, toolboxPod, vclusterValues, type ManifestOptions, type SessionSpec } from './manifests';
@@ -17,6 +20,7 @@ import {
   ANN,
   CHECKER_CONTAINER,
   LABEL_SESSION,
+  SHELL_CONTAINER,
   LABEL_USER,
   TOOLBOX_POD,
   VCLUSTER_KUBECONFIG_SECRET,
@@ -45,6 +49,12 @@ class SessionGone extends Error {}
 export class SessionsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SessionsService.name);
   labs = new Map<string, RunnableLab>();
+  exercises = new Map<string, RunnableExercise>();
+  /**
+   * Exercise loads per session namespace on this replica: one runs at a
+   * time; a request made meanwhile replaces any pending one (latest wins).
+   */
+  private loads = new Map<string, { next?: RunnableExercise }>();
   private apiServerCidrs: string[] = [];
   private starting = new Set<string>();
   private lastTouch = new Map<string, number>();
@@ -57,7 +67,8 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     this.labs = loadLabs(this.env.CONTENT_DIR);
-    this.logger.log(`Loaded ${this.labs.size} runnable labs`);
+    this.exercises = loadExercises(this.env.CONTENT_DIR);
+    this.logger.log(`Loaded ${this.labs.size} runnable labs and ${this.exercises.size} exercises`);
     if (this.env.LABS_APISERVER_CIDRS) {
       this.apiServerCidrs = this.env.LABS_APISERVER_CIDRS.split(',').map(s => s.trim()).filter(Boolean);
     } else if (this.env.LABS_NETWORK_POLICIES) {
@@ -104,6 +115,17 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
     return lab;
   }
 
+  /** Every namespace any exercise owns: loading one exercise clears the others. */
+  private get allExerciseNamespaces(): string[] {
+    return [...this.exercises.values()].flatMap(e => e.namespaces);
+  }
+
+  exercise(id: string): RunnableExercise {
+    const e = this.exercises.get(id);
+    if (!e) throw new NotFoundException(`Unknown exercise "${id}"`);
+    return e;
+  }
+
   // --- Queries -------------------------------------------------------------
 
   private async listSessions(labelSelector = `${LABEL_SESSION}=true`): Promise<V1Namespace[]> {
@@ -133,16 +155,24 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
 
   // --- Commands ------------------------------------------------------------
 
-  async start(userId: string, labId: string | null): Promise<LabSessionDto> {
+  async start(userId: string, labId: string | null, exerciseId: string | null = null): Promise<LabSessionDto> {
     if (labId) this.lab(labId);
+    if (exerciseId) {
+      if (labId) throw new BadRequestException('Exercises run in the playground, not in a lab');
+      this.exercise(exerciseId);
+    }
     if (this.starting.has(userId)) throw new ConflictException('A lab environment is already starting');
     this.starting.add(userId);
     try {
       const existing = await this.findNamespace(userId);
       if (existing) {
         const a = existing.metadata?.annotations ?? {};
-        // Same lab, still healthy: starting again is a no-op (double clicks, two tabs).
-        if ((a[ANN.lab] || null) === labId && a[ANN.phase] !== 'Failed') return this.toDto(existing);
+        // Same lab, still healthy: starting again is a no-op (double clicks, two
+        // tabs). A playground keeps its cluster and only switches exercise.
+        if ((a[ANN.lab] || null) === labId && a[ANN.phase] !== 'Failed') {
+          if (exerciseId && a[ANN.exercise] !== exerciseId) return this.queueExercise(existing, exerciseId);
+          return this.toDto(existing);
+        }
         await this.deleteNamespace(existing.metadata!.name!);
       }
 
@@ -156,6 +186,7 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
         namespace: sessionNamespaceName(this.env.LABS_NAMESPACE_PREFIX, userId),
         userId,
         labId,
+        exerciseId,
         createdAt: now,
         expiresAt: new Date(now.getTime() + this.env.LABS_MAX_MINUTES * 60_000),
       };
@@ -178,8 +209,93 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
     const ns = await this.findNamespace(userId);
     if (!ns) throw new NotFoundException('No lab environment is running');
     const labId = ns.metadata?.annotations?.[ANN.lab] || null;
+    const exerciseId = ns.metadata?.annotations?.[ANN.exercise] || null;
     await this.deleteNamespace(ns.metadata!.name!);
-    return this.start(userId, labId);
+    return this.start(userId, labId, exerciseId && this.exercises.has(exerciseId) ? exerciseId : null);
+  }
+
+  // --- Exercises -----------------------------------------------------------
+
+  /**
+   * Loads (or reloads: that is the reset) an exercise into the user's
+   * playground. Seconds, not the minute a new cluster takes.
+   */
+  async loadExercise(userId: string, exerciseId: string): Promise<LabSessionDto> {
+    this.exercise(exerciseId);
+    const ns = await this.findNamespace(userId);
+    if (!ns) return this.start(userId, null, exerciseId);
+    if (ns.metadata?.annotations?.[ANN.lab]) {
+      throw new ConflictException('Your environment is running a lab. End it, or start the exercise to replace it.');
+    }
+    return this.queueExercise(ns, exerciseId);
+  }
+
+  /** Marks the exercise as loading; it runs now if the cluster is ready, else when provisioning ends. */
+  private async queueExercise(ns: V1Namespace, exerciseId: string): Promise<LabSessionDto> {
+    const name = ns.metadata!.name!;
+    const ready = ns.metadata?.annotations?.[ANN.phase] === 'Ready';
+    const annotations = {
+      [ANN.exercise]: exerciseId,
+      [ANN.exerciseState]: 'Loading',
+      [ANN.exerciseMessage]: ready ? 'Setting up the exercise' : 'Waiting for your cluster',
+      [ANN.exerciseLoadedAt]: new Date().toISOString(),
+    };
+    await this.annotate(name, annotations);
+    if (ready) this.scheduleLoad(name, this.exercise(exerciseId));
+    void this.touch(name);
+    const merged = { ...ns, metadata: { ...ns.metadata, annotations: { ...ns.metadata?.annotations, ...annotations } } };
+    return this.toDto(merged);
+  }
+
+  private scheduleLoad(namespace: string, e: RunnableExercise): void {
+    const running = this.loads.get(namespace);
+    if (running) {
+      running.next = e;
+      return;
+    }
+    const state: { next?: RunnableExercise } = {};
+    this.loads.set(namespace, state);
+    void (async () => {
+      try {
+        for (let current: RunnableExercise | undefined = e; current; ) {
+          await this.runExerciseLoad(namespace, current, state);
+          current = state.next;
+          state.next = undefined;
+        }
+      } finally {
+        this.loads.delete(namespace);
+      }
+    })();
+  }
+
+  private async runExerciseLoad(namespace: string, e: RunnableExercise, state: { next?: RunnableExercise }): Promise<void> {
+    const started = Date.now();
+    // A newer request (or another exercise) supersedes this load: it must not report anything.
+    const stillWanted = async () =>
+      !state.next && (await this.kube.core.readNamespace({ name: namespace })).metadata?.annotations?.[ANN.exercise] === e.id;
+    try {
+      const cluster = await this.kube.run(namespace, TOOLBOX_POD, CHECKER_CONTAINER, exerciseClusterScript(e, this.allExerciseNamespaces), 280);
+      if (cluster.exitCode !== 0) {
+        throw new Error(`Exercise setup failed (exit ${cluster.exitCode}): ${shortMessage(`${cluster.stdout}\n${cluster.stderr}`, 400)}`);
+      }
+      const home = await this.kube.run(namespace, TOOLBOX_POD, SHELL_CONTAINER, exerciseHomeScript(e), 30);
+      if (home.exitCode !== 0) throw new Error(`Could not write the starter files: ${shortMessage(home.stderr, 200)}`);
+      const lines = await this.kube.run(namespace, TOOLBOX_POD, CHECKER_CONTAINER, `wc -l < ${studentFile('.bash_history')} 2>/dev/null || echo 0`, 15);
+      const historyOffset = String(Number.parseInt(lines.stdout.trim(), 10) || 0);
+      if (!(await stillWanted())) return;
+      await this.annotate(namespace, {
+        [ANN.exerciseState]: 'Ready',
+        [ANN.exerciseMessage]: null,
+        [ANN.exerciseHistoryOffset]: historyOffset,
+      });
+      this.logger.log(`Exercise ${e.id} loaded into ${namespace} in ${Math.round((Date.now() - started) / 1000)}s`);
+    } catch (err) {
+      if (isNotFound(err)) return;
+      const message = shortMessage((err as Error).message || 'Loading the exercise failed');
+      if (!(await stillWanted().catch(() => false))) return;
+      this.logger.warn(`Exercise ${e.id} in ${namespace} failed: ${message}`);
+      await this.annotate(namespace, { [ANN.exerciseState]: 'Failed', [ANN.exerciseMessage]: message }).catch(() => undefined);
+    }
   }
 
   private async deleteNamespace(name: string): Promise<void> {
@@ -274,6 +390,14 @@ export class SessionsService implements OnModuleInit, OnModuleDestroy {
 
       await this.annotate(ns, { [ANN.phase]: 'Ready', [ANN.message]: null, [ANN.activeAt]: new Date().toISOString() });
       this.logger.log(`Session ${ns} ready in ${Math.round((Date.now() - started) / 1000)}s`);
+
+      // An exercise requested while the cluster was starting.
+      const now = await this.kube.core.readNamespace({ name: ns });
+      const pending = now.metadata?.annotations?.[ANN.exercise];
+      if (pending && now.metadata?.annotations?.[ANN.exerciseState] === 'Loading' && this.exercises.has(pending)) {
+        await this.annotate(ns, { [ANN.exerciseMessage]: 'Setting up the exercise', [ANN.exerciseLoadedAt]: new Date().toISOString() });
+        this.scheduleLoad(ns, this.exercise(pending));
+      }
     } catch (err) {
       if (err instanceof SessionGone || isNotFound(err)) {
         this.logger.log(`Session ${ns} was deleted while provisioning`);

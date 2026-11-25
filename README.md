@@ -1,6 +1,6 @@
 # CKA Lab
 
-A self-hosted, private learning platform for the **Certified Kubernetes Administrator** exam: a structured course mapped to the official CNCF competencies, hands-on labs with **a private Kubernetes cluster and terminal in the browser** for every student, server-graded quizzes, timed mock exams and searchable cheat sheets — deployable to any Kubernetes cluster for you and a few invited people.
+A self-hosted, private learning platform for the **Certified Kubernetes Administrator** exam: a structured course mapped to the official CNCF competencies, hands-on labs and auto-graded exercises with **a private Kubernetes cluster and terminal in the browser** for every student, server-graded quizzes, timed mock exams and searchable cheat sheets — deployable to any Kubernetes cluster for you and a few invited people.
 
 > CKA Lab is an independent study tool. Mock-exam scores are simulations based on checks you confirm yourself; they are not CKA certification results.
 
@@ -10,6 +10,7 @@ A self-hosted, private learning platform for the **Certified Kubernetes Administ
 |---|---|
 | **Course** | 30 modules (27 official competencies, Kubernetes v1.37) + a *Beyond the CKA* track (Helm authoring, Traefik, Argo CD). Every lesson follows the same nine steps: theory → visualization → command line → example → guided exercise → challenge → troubleshooting → solution → knowledge check. |
 | **Labs** | Guided, challenge and troubleshooting labs with setup, hints, checks, hidden solutions, a verify script and reset. **In the browser**: start a lab and get a private virtual cluster (vcluster) with the lab already set up, a terminal beside the instructions, ▶ buttons that paste commands into it, and **Check my work** that verifies tasks on the cluster. Or run them on your own cluster. |
+| **Exercises** | A graded practice track: every published lesson has exercises and each module ends with challenges. A CodinGame-style page — statement, terminal, answer fields, test cases, **Validate** — loads the exercise's starting state (broken Services, wrong config, missing objects) into your playground in seconds. Test cases check the cluster, typed answers, files you saved (`~/answers/…`, like the exam), commands you ran and terminal output. |
 | **Playground** | An empty cluster of your own, from the sidebar or docked beside any lesson. Idle environments are deleted automatically. |
 | **Quizzes** | Single, multiple-answer and scenario questions, graded on the server, with an explanation for every option. |
 | **Mock exams** | Timed (server-enforced), per-task checks, partial credit, review with solutions. |
@@ -56,7 +57,7 @@ Open the printed link (it points to `http://localhost:8080`), choose a password,
 | [DEPLOYMENT](docs/DEPLOYMENT.md) | build images, deploy with Helm or plain manifests, HTTPS, backups, upgrades |
 | [CONFIGURATION](docs/CONFIGURATION.md) | look up every environment variable and Helm value |
 | [SECURITY](docs/SECURITY.md) | see the threat model, what is protected and how |
-| [CONTENT_AUTHORING](docs/CONTENT_AUTHORING.md) | write lessons, labs, quizzes, exams and cheat sheets |
+| [CONTENT_AUTHORING](docs/CONTENT_AUTHORING.md) | write lessons, exercises, labs, quizzes, exams and cheat sheets |
 | [LAB_ARCHITECTURE](docs/LAB_ARCHITECTURE.md) | understand the browser lab environments: virtual clusters, terminal, checks, isolation |
 
 ## Repository layout
@@ -73,7 +74,7 @@ packages/
   service-kit/    HTTP hardening, logging, migrations under a lock, secrets from files
 images/
   toolbox/        the student workstation behind the terminal (kubectl, helm, vim…)
-content/          curriculum.yaml, lessons (MDX), labs, quizzes, exams, cheat sheets
+content/          curriculum.yaml, lessons (MDX), exercises, labs, quizzes, exams, cheat sheets
 deploy/
   compose/        edge proxy config, Postgres init script
   helm/cka-lab/   Helm chart (+ examples: kind, Traefik)

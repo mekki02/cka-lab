@@ -1,8 +1,8 @@
 import { Injectable, Logger, NotFoundException, type OnModuleInit } from '@nestjs/common';
-import type { CheatsheetDto, Curriculum, CurriculumLesson, CurriculumModule, ExamDomainId } from '@cka/contracts';
+import type { CheatsheetDto, Curriculum, CurriculumLesson, CurriculumModule, ExamDomainId, ExerciseSummaryDto } from '@cka/contracts';
 import { Env } from '../config/env';
 import { loadContent, type ContentBundle } from './loader';
-import type { Exam, Lab, Quiz } from './schemas';
+import type { Exam, Exercise, Lab, Quiz } from './schemas';
 
 /**
  * In-memory, read-only view of the course content. Loaded once at startup:
@@ -19,11 +19,13 @@ export class ContentService implements OnModuleInit {
   private curriculumDto!: Curriculum;
   private lessons = new Map<string, CurriculumLesson>();
   private modules = new Map<string, CurriculumModule>();
+  private orderedExercisesList: Exercise[] = [];
 
   constructor(private readonly env: Env) {}
 
   onModuleInit(): void {
     this.bundle = loadContent(this.env.CONTENT_DIR);
+    this.orderedExercisesList = this.orderExercises();
     this.curriculumDto = this.buildCurriculum();
     for (const m of this.curriculumDto.modules) {
       this.modules.set(m.id, m);
@@ -33,8 +35,35 @@ export class ContentService implements OnModuleInit {
     this.logger.log(
       `Loaded content ${this.curriculumDto.version} (Kubernetes ${this.curriculumDto.kubernetesVersion}): ` +
         `${this.modules.size} modules, ${published}/${this.lessons.size} lessons published, ` +
-        `${this.bundle.labs.size} labs, ${this.bundle.quizzes.size} quizzes, ${this.bundle.exams.size} exams`,
+        `${this.bundle.labs.size} labs, ${this.bundle.exercises.size} exercises, ${this.bundle.quizzes.size} quizzes, ${this.bundle.exams.size} exams`,
     );
+  }
+
+  /**
+   * Course order: by module, then by lesson (a lesson's exercises follow it),
+   * with module challenges last; then `order`, then id.
+   */
+  private orderExercises(): Exercise[] {
+    const pos = new Map<string, number>();
+    this.bundle.curriculum.modules.forEach((m, mi) => {
+      pos.set(m.id, mi * 1000 + 999);
+      m.lessons.forEach((l, li) => pos.set(l.id, mi * 1000 + li));
+    });
+    const key = (e: Exercise) => pos.get(e.lesson ?? e.module) ?? Number.MAX_SAFE_INTEGER;
+    return [...this.bundle.exercises.values()].sort((a, b) => key(a) - key(b) || a.order - b.order || a.id.localeCompare(b.id));
+  }
+
+  static exerciseSummary(e: Exercise): ExerciseSummaryDto {
+    return {
+      id: e.id,
+      title: e.title,
+      moduleId: e.module,
+      lessonId: e.lesson ?? null,
+      kind: e.kind,
+      difficulty: e.difficulty,
+      minutes: e.minutes,
+      tags: e.tags,
+    };
   }
 
   private buildCurriculum(): Curriculum {
@@ -48,6 +77,7 @@ export class ContentService implements OnModuleInit {
       domains: c.domains,
       modules: c.modules.map(m => {
         const moduleLabs = labs.filter(l => l.module === m.id);
+        const moduleExercises = this.orderedExercisesList.filter(e => e.module === m.id);
         const lessons: CurriculumLesson[] = m.lessons.map((l, i) => ({
           id: l.id,
           moduleId: m.id,
@@ -69,7 +99,11 @@ export class ContentService implements OnModuleInit {
           quizzes: quizzes
             .filter(q => q.module === m.id)
             .map(q => ({ id: q.id, title: q.title, questions: q.questions.length })),
-          minutes: lessons.reduce((s, l) => s + l.minutes, 0) + moduleLabs.reduce((s, l) => s + l.minutes, 0),
+          exercises: moduleExercises.map(ContentService.exerciseSummary),
+          minutes:
+            lessons.reduce((s, l) => s + l.minutes, 0) +
+            moduleLabs.reduce((s, l) => s + l.minutes, 0) +
+            moduleExercises.reduce((s, e) => s + e.minutes, 0),
         };
       }),
     };
@@ -106,6 +140,17 @@ export class ContentService implements OnModuleInit {
     const l = this.bundle.labs.get(id);
     if (!l) throw new NotFoundException(`Unknown lab "${id}"`);
     return l;
+  }
+
+  /** Exercises in course order. */
+  get exercises(): Exercise[] {
+    return this.orderedExercisesList;
+  }
+
+  exercise(id: string): Exercise {
+    const e = this.bundle.exercises.get(id);
+    if (!e) throw new NotFoundException(`Unknown exercise "${id}"`);
+    return e;
   }
 
   get quizzes(): Quiz[] {

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { DashboardDto, DomainProgressDto, ExamDomainId } from '@cka/contracts';
 import { ExamsService } from '../assessments/exams.service';
+import { ExercisesService } from '../assessments/exercises.service';
 import { LabsService } from '../assessments/labs.service';
 import { QuizzesService } from '../assessments/quizzes.service';
 import { percent } from '../assessments/grading';
@@ -20,16 +21,18 @@ export class DashboardService {
     private readonly labs: LabsService,
     private readonly quizzes: QuizzesService,
     private readonly exams: ExamsService,
+    private readonly exercises: ExercisesService,
   ) {}
 
   async forUser(userId: string): Promise<DashboardDto> {
-    const [completed, recent, labProgress, best, quizHistory, examHistory] = await Promise.all([
+    const [completed, recent, labProgress, best, quizHistory, examHistory, exercisesDone] = await Promise.all([
       this.progress.completedLessonIds(userId),
       this.progress.recent(userId),
       this.labs.listProgress(userId),
       this.quizzes.bestScores(userId),
       this.quizzes.history(userId),
       this.exams.history(userId),
+      this.exercises.completedIds(userId),
     ]);
 
     const curriculum = this.content.curriculum;
@@ -85,6 +88,8 @@ export class DashboardService {
         lessonsPlanned: ordered.length - published.length,
         labsCompleted: labProgress.filter(p => p.status === 'COMPLETED' && labIds.has(p.labId)).length,
         labsTotal: labIds.size,
+        exercisesCompleted: this.content.exercises.filter(e => exercisesDone.has(e.id)).length,
+        exercisesTotal: this.content.exercises.length,
         quizzesPassed: this.content.quizzes.filter(q => (best.get(q.id) ?? 0) >= q.passPercent).length,
         quizzesTotal: this.content.quizzes.length,
       },

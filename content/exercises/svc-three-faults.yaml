@@ -1,0 +1,108 @@
+id: svc-three-faults
+title: "Three faults, one Service: run the decision path"
+module: services
+lesson: services-troubleshooting
+kind: exercise
+difficulty: intermediate
+minutes: 15
+order: 1
+tags: [troubleshooting, probes, ports]
+namespaces: [ex-api]
+setup: |
+  cat <<'YAML' | kubectl apply -f -
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata: { name: api, namespace: ex-api }
+  spec:
+    replicas: 2
+    selector: { matchLabels: { app: api, tier: backend } }
+    template:
+      metadata: { labels: { app: api, tier: backend } }
+      spec:
+        containers:
+          - name: api
+            image: registry.k8s.io/e2e-test-images/agnhost:2.53
+            args: ["netexec", "--http-port=8080"]
+            readinessProbe:
+              httpGet: { path: /healthz, port: 8000 }
+  ---
+  apiVersion: v1
+  kind: Service
+  metadata: { name: api, namespace: ex-api }
+  spec:
+    selector: { app: api, tier: frontend }
+    ports:
+      - port: 80
+        targetPort: 80
+  YAML
+  kubectl -n ex-api run debug --image=busybox:1.36 --restart=Never -- sleep 36000
+  kubectl -n ex-api create configmap original \
+    --from-literal=svc="$(kubectl -n ex-api get svc api -o jsonpath='{.metadata.uid}')" \
+    --from-literal=deploy="$(kubectl -n ex-api get deploy api -o jsonpath='{.metadata.uid}')"
+statement: |
+  `k -n ex-api exec debug -- wget -qO- -T 3 api/hostname` should print the name of the `api` Pod that
+  answered. It times out.
+
+  Without reading the manifests first, walk the decision path from the lesson — **DNS → Service →
+  endpoints → Pod directly → network** — and let each step tell you which layer is broken. There are
+  **three** faults. Fix them in place (patch or edit; do not delete the Service or the Deployment).
+inputs:
+  - id: refused
+    label: "Endpoints are listed and Ready, but `wget` to the Service gets `connection refused`. What is wrong?"
+    kind: choice
+    options:
+      - { id: a, text: The Service selector }
+      - { id: b, text: The readiness probe }
+      - { id: c, text: The Service's targetPort }
+      - { id: d, text: CoreDNS }
+checks:
+  - id: endpoints
+    description: api has 2 ready endpoints
+    type: cluster
+    command: kubectl -n ex-api get endpointslices -l kubernetes.io/service-name=api -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.addresses[0]}{"\n"}{end}' 2>/dev/null | grep -c .
+    expect: "2"
+    match: number
+  - id: answers
+    description: debug gets a Pod name back from api/hostname
+    type: cluster
+    command: kubectl -n ex-api exec debug -- wget -qO- -T 3 api/hostname
+    expect: ^api-[a-z0-9]+-[a-z0-9]+$
+    match: regex
+  - id: in-place
+    description: The Service and the Deployment were fixed in place
+    type: cluster
+    command: |
+      [ "$(kubectl -n ex-api get svc api -o jsonpath={.metadata.uid})" = "$(kubectl -n ex-api get cm original -o jsonpath={.data.svc})" ] &&
+      [ "$(kubectl -n ex-api get deploy api -o jsonpath={.metadata.uid})" = "$(kubectl -n ex-api get cm original -o jsonpath={.data.deploy})" ]
+    expect: same uids as at the start
+    match: success
+  - id: refused
+    description: You can read the "refused" symptom
+    type: answer
+    input: refused
+    expect: c
+hints:
+  - "Endpoints first: `k -n ex-api get endpointslices -l kubernetes.io/service-name=api`. Empty? Compare the selector with `--show-labels`."
+  - "Pods `0/1` Ready? `k -n ex-api describe pod -l app=api` — what does the probe call, and what does the container listen on (its args)?"
+  - "Bypass the Service: `k -n ex-api exec debug -- wget -qO- -T 3 <pod-ip>:8080/hostname` works, but does the Service forward to 8080?"
+solution: |
+  1. **Selector** `tier: frontend` vs Pod label `tier: backend` → no endpoints.
+  2. **Readiness probe** on port `8000`, but `agnhost netexec` listens on `8080` → Pods never Ready.
+  3. **targetPort** `80`, but nothing listens there → connection refused.
+
+  ```bash
+  k -n ex-api patch svc api -p '{"spec":{"selector":{"app":"api","tier":"backend"}}}'
+  k -n ex-api patch deploy api --type=json \
+    -p '[{"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/httpGet/port","value":8080}]'
+  k -n ex-api rollout status deploy api
+  k -n ex-api patch svc api --type=json -p '[{"op":"replace","path":"/spec/ports/0/targetPort","value":8080}]'
+  k -n ex-api exec debug -- wget -qO- -T 3 api/hostname
+  ```
+autotest:
+  solve: |
+    kubectl -n ex-api patch svc api -p '{"spec":{"selector":{"app":"api","tier":"backend"}}}'
+    kubectl -n ex-api patch deploy api --type=json -p '[{"op":"replace","path":"/spec/template/spec/containers/0/readinessProbe/httpGet/port","value":8080}]'
+    kubectl -n ex-api rollout status deploy api --timeout=180s
+    kubectl -n ex-api patch svc api --type=json -p '[{"op":"replace","path":"/spec/ports/0/targetPort","value":8080}]'
+    sleep 3
+  answers: { refused: c }

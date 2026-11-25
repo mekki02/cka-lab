@@ -1,0 +1,80 @@
+id: types-nodeport-headless
+title: "NodePort and headless: same Pods, different Services"
+module: services
+lesson: service-types
+kind: exercise
+difficulty: intermediate
+minutes: 12
+order: 1
+tags: [nodeport, headless, dns]
+namespaces: [ex-types]
+setup: |
+  kubectl -n ex-types create deployment web --image=nginx:1.27 --replicas=3
+  kubectl -n ex-types expose deployment web --port=80
+  kubectl -n ex-types run client --image=busybox:1.36 --restart=Never -- sleep 36000
+  kubectl -n ex-types rollout status deployment web --timeout=180s
+statement: |
+  `ex-types` has a Deployment `web` (3 nginx Pods), a ClusterIP Service `web`, and a `client` Pod.
+  Add two more Services for the same Pods:
+
+  1. `web-np` of type **NodePort**, port 80 → target port 80. Let Kubernetes choose the node port
+     (do not set one: in this shared environment a fixed port could collide with someone else's), then
+     enter the port it chose below.
+  2. `web-headless`, a **headless** Service on port 80, so that DNS returns the Pod IPs instead of one
+     virtual IP. Compare:
+
+     ```bash
+     k -n ex-types exec client -- nslookup web
+     k -n ex-types exec client -- nslookup web-headless
+     ```
+inputs:
+  - id: node-port
+    label: The node port Kubernetes assigned to web-np
+    placeholder: 30000-32767
+checks:
+  - id: nodeport-type
+    description: web-np is a NodePort Service for the web Pods on port 80
+    type: cluster
+    command: kubectl -n ex-types get svc web-np -o jsonpath='{.spec.type} {.spec.selector.app} {.spec.ports[0].port}->{.spec.ports[0].targetPort}'
+    expect: NodePort web 80->80
+    match: exact
+  - id: node-port
+    description: You found the assigned node port
+    type: answer
+    input: node-port
+    expectCommand: kubectl -n ex-types get svc web-np -o jsonpath='{.spec.ports[0].nodePort}'
+    match: number
+  - id: headless
+    description: web-headless has no ClusterIP
+    type: cluster
+    command: kubectl -n ex-types get svc web-headless -o jsonpath='{.spec.clusterIP} {.spec.selector.app}'
+    expect: None web
+    match: exact
+  - id: headless-dns
+    description: DNS for web-headless returns the 3 Pod IPs
+    type: cluster
+    command: kubectl -n ex-types exec client -- nslookup web-headless.ex-types.svc.cluster.local | sed -n '/^Name:/,$p' | grep -c '^Address'
+    expect: "3"
+    match: number
+hints:
+  - "`k -n ex-types expose deployment web --name=web-np --type=NodePort --port=80`"
+  - "A headless Service is a ClusterIP Service with `clusterIP: None`: `k -n ex-types expose deployment web --name=web-headless --port=80 --cluster-ip=None`."
+solution: |
+  ```bash
+  k -n ex-types expose deployment web --name=web-np --type=NodePort --port=80
+  k -n ex-types get svc web-np -o jsonpath='{.spec.ports[0].nodePort}{"\n"}'
+
+  k -n ex-types expose deployment web --name=web-headless --port=80 --cluster-ip=None
+  k -n ex-types exec client -- nslookup web-headless
+  ```
+
+  `nslookup web` returns one address (the ClusterIP; kube-proxy load-balances behind it). `nslookup
+  web-headless` returns one A record **per ready Pod**: clients pick a Pod themselves, which is what
+  StatefulSets rely on for stable per-Pod names.
+autotest:
+  solve: |
+    kubectl -n ex-types expose deployment web --name=web-np --type=NodePort --port=80
+    kubectl -n ex-types expose deployment web --name=web-headless --port=80 --cluster-ip=None
+    sleep 5
+  answers:
+    node-port: "$(kubectl -n ex-types get svc web-np -o jsonpath='{.spec.ports[0].nodePort}')"

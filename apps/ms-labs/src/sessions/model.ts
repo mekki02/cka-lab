@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { V1Namespace } from '@kubernetes/client-node';
-import type { CheckResultDto, LabSessionDto, LabSessionPhase } from '@cka/contracts';
+import type { CheckResultDto, ExerciseLoadState, LabSessionDto, LabSessionPhase, LoadedExerciseDto } from '@cka/contracts';
 
 /**
  * A lab session *is* a namespace on the lab cluster. Its state lives in the
@@ -18,7 +18,17 @@ export const ANN = {
   expiresAt: 'cka-lab/expires-at',
   activeAt: 'cka-lab/last-active-at',
   results: 'cka-lab/results',
+  /** Playground only: the exercise loaded into the cluster, and how far loading got. */
+  exercise: 'cka-lab/exercise',
+  exerciseState: 'cka-lab/exercise-state',
+  exerciseMessage: 'cka-lab/exercise-message',
+  exerciseLoadedAt: 'cka-lab/exercise-loaded-at',
+  /** Lines in the student's shell history when the exercise finished loading: `history` checks look after it. */
+  exerciseHistoryOffset: 'cka-lab/exercise-history-offset',
 } as const;
+
+/** A load that has said "Loading" this long died with its replica: report it as failed. */
+export const EXERCISE_LOAD_STALE_MS = 6 * 60_000;
 
 export const PHASES: readonly LabSessionPhase[] = ['Provisioning', 'Starting', 'SettingUp', 'Ready', 'Failed'];
 
@@ -62,6 +72,19 @@ export interface SessionTimes {
   idleMinutes: number;
 }
 
+export const loadedExercise = (a: Record<string, string>, now = new Date()): LoadedExerciseDto | null => {
+  const id = a[ANN.exercise];
+  if (!id) return null;
+  const loadedAt = iso(a[ANN.exerciseLoadedAt], now);
+  let state: ExerciseLoadState = (['Loading', 'Ready', 'Failed'] as const).find(s => s === a[ANN.exerciseState]) ?? 'Loading';
+  let message = a[ANN.exerciseMessage] || null;
+  if (state === 'Loading' && now.getTime() - new Date(loadedAt).getTime() > EXERCISE_LOAD_STALE_MS) {
+    state = 'Failed';
+    message = 'Loading the exercise did not finish. Load it again.';
+  }
+  return { id, state, message, loadedAt };
+};
+
 export const namespaceToSession = (ns: V1Namespace, times: SessionTimes, kubernetesVersion: string): LabSessionDto => {
   const a = ns.metadata?.annotations ?? {};
   const created = ns.metadata?.creationTimestamp ? new Date(ns.metadata.creationTimestamp) : new Date();
@@ -77,6 +100,7 @@ export const namespaceToSession = (ns: V1Namespace, times: SessionTimes, kuberne
     idleExpiresAt: new Date(activeAt.getTime() + times.idleMinutes * 60_000).toISOString(),
     results: parseResults(a[ANN.results]),
     kubernetesVersion,
+    exercise: loadedExercise(a),
   };
 };
 

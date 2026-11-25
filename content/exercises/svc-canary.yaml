@@ -1,0 +1,84 @@
+id: svc-canary
+title: "A Service for only some Pods"
+module: services
+lesson: services-fundamentals
+kind: exercise
+difficulty: intermediate
+minutes: 12
+order: 3
+tags: [selectors, labels]
+namespaces: [ex-canary]
+setup: |
+  kubectl -n ex-canary create deployment web --image=nginx:1.27 --replicas=3
+  kubectl -n ex-canary expose deployment web --port=80
+  kubectl -n ex-canary rollout status deployment web --timeout=180s
+statement: |
+  In `ex-canary`, the Deployment `web` already has a Service `web`. Add a second Service, `web-canary`,
+  that routes **only** to Pods carrying the label `track=canary`.
+
+  - Label exactly **one** existing `web` Pod with `track=canary` — do not change the Deployment.
+  - Create `web-canary` (port 80 → target port 80) so that it has exactly one endpoint.
+  - Answer the question below *before* trying it out.
+inputs:
+  - id: after-delete
+    label: If that labelled Pod is deleted, how many endpoints does web-canary have once things settle?
+    kind: choice
+    options:
+      - { id: a, text: "One: the ReplicaSet recreates the Pod with its labels" }
+      - { id: b, text: "Zero: the replacement comes from the template, which has no track label" }
+      - { id: c, text: "Three: the selector falls back to app=web" }
+checks:
+  - id: one-endpoint
+    description: web-canary has exactly 1 ready endpoint
+    type: cluster
+    command: kubectl -n ex-canary get endpointslices -l kubernetes.io/service-name=web-canary -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.addresses[0]}{"\n"}{end}' 2>/dev/null | grep -c .
+    expect: "1"
+    match: number
+  - id: selector
+    description: web-canary selects app=web and track=canary
+    type: cluster
+    command: kubectl -n ex-canary get svc web-canary -o jsonpath='{.spec.selector.app},{.spec.selector.track}|{.spec.ports[0].port}->{.spec.ports[0].targetPort}'
+    expect: web,canary|80->80
+    match: exact
+  - id: web-intact
+    description: The Service web still has all 3 Pods
+    type: cluster
+    command: kubectl -n ex-canary get endpointslices -l kubernetes.io/service-name=web -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.addresses[0]}{"\n"}{end}' 2>/dev/null | grep -c .
+    expect: "3"
+    match: number
+  - id: template-untouched
+    description: The Deployment's Pod template was not changed
+    type: cluster
+    command: '[ -z "$(kubectl -n ex-canary get deploy web -o jsonpath={.spec.template.metadata.labels.track})" ]'
+    expect: no track label in the template
+    match: success
+  - id: after-delete
+    description: You know what happens to hand-added labels
+    type: answer
+    input: after-delete
+    expect: b
+hints:
+  - "`k -n ex-canary label pod <name> track=canary` adds a label to one running Pod."
+  - "`k create service clusterip` has no `--selector` flag: generate it with `$do`, edit the selector, apply. A Pod must match **every** label of a selector."
+solution: |
+  ```bash
+  POD=$(k -n ex-canary get pods -l app=web -o jsonpath='{.items[0].metadata.name}')
+  k -n ex-canary label pod "$POD" track=canary
+
+  k -n ex-canary create service clusterip web-canary --tcp=80:80 $do > web-canary.yaml
+  # selector:  app: web  /  track: canary
+  vim web-canary.yaml
+  k apply -f web-canary.yaml
+  k -n ex-canary get endpointslices -l kubernetes.io/service-name=web-canary
+  ```
+
+  Deleting the labelled Pod makes the ReplicaSet create a replacement from the **template**, which has no
+  `track` label: `web-canary` ends up with **zero** endpoints. Durable canaries use a second Deployment
+  with its own template labels.
+autotest:
+  solve: |
+    POD=$(kubectl -n ex-canary get pods -l app=web -o jsonpath='{.items[0].metadata.name}')
+    kubectl -n ex-canary label pod "$POD" track=canary
+    kubectl -n ex-canary create service clusterip web-canary --tcp=80:80 --dry-run=client -o yaml | yq '.spec.selector = {"app":"web","track":"canary"}' | kubectl apply -f -
+    sleep 3
+  answers: { after-delete: b }

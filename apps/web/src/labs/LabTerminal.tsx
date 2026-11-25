@@ -30,13 +30,38 @@ const THEME = {
  *
  * `onReady` hands the parent a paste function (for "Run in terminal").
  */
-export const LabTerminal = ({ sessionId, onReady }: { sessionId: string; onReady?: (paste: ((t: string) => void) | null) => void }) => {
+/** The last `lines` lines of what the terminal shows (scrollback included), as plain text. */
+const readTerminal = (term: Terminal, lines = 400): string => {
+  const buf = term.buffer.active;
+  const out: string[] = [];
+  for (let i = Math.max(0, buf.length - lines); i < buf.length; i++) {
+    const line = buf.getLine(i);
+    if (!line) continue;
+    // Wrapped lines continue the previous one.
+    if (line.isWrapped && out.length) out[out.length - 1] += line.translateToString(true);
+    else out.push(line.translateToString(true));
+  }
+  return out.join('\n').replace(/\n+$/, '');
+};
+
+export const LabTerminal = ({
+  sessionId,
+  onReady,
+  onReader,
+}: {
+  sessionId: string;
+  onReady?: (paste: ((t: string) => void) | null) => void;
+  /** Hands the parent a function that reads the terminal's text (exercise `terminal` checks). */
+  onReader?: (read: (() => string) | null) => void;
+}) => {
   const host = useRef<HTMLDivElement>(null);
   const dispatch = useAppDispatch();
   const [state, setState] = useState<State>({ kind: 'connecting' });
   const [attempt, setAttempt] = useState(0);
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
+  const onReaderRef = useRef(onReader);
+  onReaderRef.current = onReader;
 
   useEffect(() => {
     if (!host.current) return;
@@ -102,10 +127,12 @@ export const LabTerminal = ({ sessionId, onReady }: { sessionId: string; onReady
       term.paste(text);
       term.focus();
     });
+    onReaderRef.current?.(() => readTerminal(term));
 
     return () => {
       disposed = true;
       onReadyRef.current?.(null);
+      onReaderRef.current?.(null);
       observer.disconnect();
       input.dispose();
       resize.dispose();

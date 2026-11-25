@@ -48,7 +48,7 @@ try {
   const published = lessons.filter(l => l.status === 'published').length;
   console.log(
     `Content OK: ${bundle.curriculum.modules.length} modules, ${published}/${lessons.length} lessons published, ` +
-      `${bundle.labs.size} labs, ${bundle.quizzes.size} quizzes ` +
+      `${bundle.labs.size} labs, ${bundle.exercises.size} exercises, ${bundle.quizzes.size} quizzes ` +
       `(${[...bundle.quizzes.values()].reduce((n, q) => n + q.questions.length, 0)} questions), ` +
       `${bundle.exams.size} mock exams, ${bundle.cheatsheets.length} cheat sheets.`,
   );

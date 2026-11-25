@@ -3,6 +3,8 @@
  * browser terminal attached to it, and server-side checks.
  */
 
+import type { LoadedExerciseDto } from './exercises';
+
 export const API_PREFIX_LABS = '/api/labs';
 /** WebSocket endpoint of the browser terminal (same origin, cookie-authenticated). */
 export const LABS_TERMINAL_PATH = '/api/labs/session/terminal';
@@ -39,11 +41,15 @@ export interface LabSessionDto {
   /** Latest result per check, keyed `${taskId}/${checkId}`. */
   results: Record<string, CheckResultDto>;
   kubernetesVersion: string;
+  /** The exercise loaded into a playground, if any. */
+  exercise: LoadedExerciseDto | null;
 }
 
 export interface StartLabSessionRequest {
   /** Omit for a playground. */
   labId?: string;
+  /** Playground only: load this exercise as soon as the cluster is ready. */
+  exerciseId?: string;
 }
 
 export interface LabsInfoDto {

@@ -1,0 +1,63 @@
+id: types-externalname
+title: "Give an external service an in-cluster name"
+module: services
+lesson: service-types
+kind: exercise
+difficulty: intermediate
+minutes: 8
+order: 2
+tags: [externalname, dns]
+namespaces: [ex-shop]
+setup: |
+  kubectl -n ex-shop run client --image=busybox:1.36 --restart=Never -- sleep 36000
+  kubectl -n ex-shop wait --for=condition=Ready pod/client --timeout=120s
+statement: |
+  Applications in `ex-shop` must reach a payment API at `api.payments.example.com` using the name
+  `payments`, so the address can later move into the cluster without changing the applications.
+
+  1. Create what is needed.
+  2. Verify it from the `client` Pod with `nslookup payments`. The domain does not really exist — what
+     output still proves your Service is right?
+inputs:
+  - id: later
+    label: Later, the payment API moves into the cluster. How do you switch clients over without touching them?
+    kind: choice
+    options:
+      - { id: a, text: Replace `payments` with a ClusterIP Service of the same name that selects the new Pods }
+      - { id: b, text: "Add `api.payments.example.com` to each Pod's `/etc/hosts`" }
+      - { id: c, text: Rename the ExternalName Service to `payments-old` }
+      - { id: d, text: Edit the CoreDNS ConfigMap }
+checks:
+  - id: type
+    description: payments is an ExternalName Service for api.payments.example.com
+    type: cluster
+    command: kubectl -n ex-shop get svc payments -o jsonpath='{.spec.type} {.spec.externalName}'
+    expect: ExternalName api.payments.example.com
+    match: exact
+  - id: cname
+    description: Cluster DNS answers payments with a CNAME to the external name
+    type: cluster
+    command: kubectl -n ex-shop exec client -- nslookup -type=CNAME payments.ex-shop.svc.cluster.local 2>&1; true
+    expect: canonical name = api.payments.example.com
+    match: contains
+  - id: later
+    description: You know why the indirection helps
+    type: answer
+    input: later
+    expect: a
+hints:
+  - "`k -n ex-shop create service externalname payments --external-name=api.payments.example.com`"
+solution: |
+  ```bash
+  k -n ex-shop create service externalname payments --external-name=api.payments.example.com
+  k -n ex-shop exec client -- nslookup payments
+  ```
+
+  `nslookup` prints `payments.ex-shop.svc.cluster.local canonical name = api.payments.example.com`, then
+  fails to resolve the (fictional) target. The CNAME proves the Service works; only the target does not
+  exist. An ExternalName Service has no selector, no ClusterIP and no endpoints — it is pure DNS.
+autotest:
+  solve: |
+    kubectl -n ex-shop create service externalname payments --external-name=api.payments.example.com
+    sleep 10
+  answers: { later: a }

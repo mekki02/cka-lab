@@ -20,7 +20,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { Gauge, gaugeClasses } from '@mui/x-charts/Gauge';
 import type { ReactNode } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
-import { useDashboardQuery, useMeQuery, useProgressQuery } from '@/api/api';
+import { useDashboardQuery, useMeQuery } from '@/api/api';
 import { ErrorState, Loading, PageHeader } from '@/components/states';
 import { useCurriculum, type CurriculumIndex } from '@/hooks/useCurriculum';
 import { timeAgo } from '@/utils/format';
@@ -52,7 +52,6 @@ export const DashboardPage = () => {
   const { data: me } = useMeQuery();
   const { data, error, isLoading, refetch } = useDashboardQuery();
   const { index, error: cError } = useCurriculum();
-  const { data: progress } = useProgressQuery();
 
   if (error || cError) return <ErrorState error={error ?? cError} onRetry={refetch} />;
   if (isLoading || !data || !index) return <Loading />;
@@ -147,7 +146,7 @@ export const DashboardPage = () => {
           <StatCard label="Quizzes passed" value={`${t.quizzesPassed}/${t.quizzesTotal}`} />
         </Grid>
         <Grid size={{ xs: 6, sm: 6, lg: 3 }}>
-          <StatCard label="Bookmarks" value={progress?.bookmarks.length ?? 0} hint={<RouterLink to="/bookmarks">Open bookmarks</RouterLink>} />
+          <StatCard label="Exercises solved" value={`${t.exercisesCompleted}/${t.exercisesTotal}`} hint={<RouterLink to="/exercises">Practise</RouterLink>} />
         </Grid>
 
         {/* Domains */}
