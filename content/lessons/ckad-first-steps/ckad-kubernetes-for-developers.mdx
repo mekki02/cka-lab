@@ -1,0 +1,195 @@
+---
+id: ckad-kubernetes-for-developers
+---
+
+You already know how to build an application. Kubernetes is the part that **runs** it: it starts your containers on a group of machines, restarts them when they crash, replaces them when a machine dies, and gives them a network address. This lesson gives you the mental model the rest of the course builds on. There is only one idea to really absorb: **you describe what you want, and controllers keep making it true.**
+
+<Phase step="theory" />
+
+## From "run this container" to "keep this running"
+
+On your laptop you run `docker run my-app:1.0`. If the process crashes, it stays dead. If the laptop reboots, nothing restarts it. If you want three copies behind a load balancer, you script it yourself.
+
+Kubernetes turns that around. You do not tell it **what to do**; you tell it **what should exist**:
+
+> "There should be 3 copies of `my-app:1.0`, each with 256 MiB of memory, reachable under the name `my-app` on port 80."
+
+You send that description (a **manifest**, usually YAML) to the **API server**. It stores it. Then small programs called **controllers** compare what you asked for (the **desired state**) with what is really running (the **actual state**) and act on the difference — forever. A crashed container, a deleted Pod, a dead node: each is just a new difference, and the controller fixes it.
+
+| Word | What it means for you |
+|---|---|
+| **Cluster** | A set of machines (nodes) managed as one. You talk to its API, never to the machines. |
+| **Node** | A machine that runs containers. You rarely care which one. |
+| **Pod** | The smallest thing Kubernetes runs: one or more containers that share a network address and can share files. Your app runs in Pods. |
+| **Object** | Anything stored in the API: a Pod, a Deployment, a Service, a ConfigMap… Every object has a **kind** and a **name**. |
+| **Controller** | A loop that makes reality match an object. The Deployment controller keeps N Pods running. |
+| **Namespace** | A folder for objects. Names must be unique inside a namespace, not across the cluster. |
+
+<Callout type="note" title="What a developer owns vs. what an administrator owns">
+The CKAD is about the objects **your application** needs: Pods, Deployments, Jobs, ConfigMaps, Secrets, Services, probes, security settings. How the cluster itself is installed, upgraded and repaired is the CKA. You will still look at the cluster — but through the API, with `kubectl`.
+</Callout>
+
+## Pods are cattle, not pets
+
+A Pod is **disposable**. It gets a new name and a new IP address each time it is recreated, and it is never "repaired" — it is replaced. That is why you almost never create bare Pods for real applications: you create a **Deployment** (or a Job, a DaemonSet…), and its controller creates the Pods for you. Anything that must survive a Pod — data, configuration, a stable address — lives in other objects: volumes, ConfigMaps, Services.
+
+<Phase step="visualization" />
+
+## The control loop
+
+<Diagram
+  caption="You change the desired state through the API. Controllers watch it and change the actual state until they match — and keep watching."
+  chart={`flowchart LR
+    You["You: kubectl apply -f app.yaml"] --> API["API server (stores desired state)"]
+    API --> C["Controller: compare desired vs actual"]
+    C -- "2 Pods running, 3 wanted" --> Act["Create 1 Pod"]
+    Act --> Actual["Actual state: Pods on nodes"]
+    Actual -- "status reported back" --> API
+    C -. "watches forever" .-> API`}
+/>
+
+## Who owns what
+
+Objects form a chain of **owners**. When you create a Deployment, it creates a ReplicaSet, which creates the Pods. Delete a Pod, and its ReplicaSet makes a new one. Delete the Deployment, and everything it owns goes with it.
+
+<Diagram
+  caption="Ownership: each object records its owner in metadata.ownerReferences."
+  chart={`flowchart TD
+    D["Deployment web (replicas: 3)"] --> RS["ReplicaSet web-7c9f8d6b5"]
+    RS --> P1["Pod web-7c9f8d6b5-abcde"]
+    RS --> P2["Pod web-7c9f8d6b5-fghij"]
+    RS --> P3["Pod web-7c9f8d6b5-klmno"]`}
+/>
+
+<Phase step="command-line" />
+
+## Talking to the cluster: kubectl
+
+`kubectl` is the command-line client of the API. Almost every command has the shape `kubectl <verb> <kind> [name] [flags]`:
+
+```bash
+kubectl get pods                 # list Pods in the current namespace
+kubectl get pods -A              # … in all namespaces
+kubectl get deploy,pods -n shop  # several kinds at once, in namespace shop
+kubectl describe pod web-1       # everything about one object, plus its events
+kubectl get pod web-1 -o yaml    # the full object as stored by the API
+kubectl delete pod web-1         # delete it (a controller may recreate it!)
+```
+
+In the playground and in the exam, `k` is an alias for `kubectl`. Use it.
+
+<Terminal
+  command="k get pods -n kube-system"
+  output={`NAME                       READY   STATUS    RESTARTS   AGE
+coredns-df8c87f55-6xrp7    1/1     Running   0          12m`}
+/>
+
+`READY 1/1` means one of one containers is ready. `RESTARTS` counts how often the kubelet restarted a container of this Pod — a number that keeps growing is your first sign of a crashing app.
+
+## Seeing ownership
+
+<Terminal
+  command="k get pod web-7c9f8d6b5-abcde -o jsonpath='{.metadata.ownerReferences[0].kind}/{.metadata.ownerReferences[0].name}'"
+  output={`ReplicaSet/web-7c9f8d6b5`}
+/>
+
+<Phase step="example" />
+
+## Practical example: the controller wins
+
+Create a Deployment, delete one of its Pods, and watch it come back:
+
+```bash
+k create deployment hello --image=nginx:1.27 --replicas=2
+k get pods -l app=hello
+k delete pod -l app=hello --wait=false   # delete both Pods
+k get pods -l app=hello                  # two NEW Pods, new names, already starting
+```
+
+Now scale it — you change the desired state, the controller does the rest:
+
+```bash
+k scale deployment hello --replicas=4
+k get pods -l app=hello
+k delete deployment hello                # the ReplicaSet and the Pods go too
+```
+
+<Phase step="guided" />
+
+## Guided exercise
+
+<Exercise kind="guided" title="Find the owner chain">
+
+1. Create the Deployment `hello` again with 2 replicas.
+2. Pick one Pod and print its owner with the `jsonpath` command above.
+3. Print the owner **of that ReplicaSet** the same way. You should see `Deployment/hello`.
+4. Delete the ReplicaSet (not the Deployment). What happens? Why?
+
+<Solution>
+
+The Deployment controller notices that its ReplicaSet is gone and creates a new one (same template, so the same name hash), which creates new Pods. Only deleting the top-level owner — the Deployment — makes the Pods go away for good.
+
+</Solution>
+</Exercise>
+
+<Phase step="challenge" />
+
+## Independent challenge
+
+<Exercise kind="challenge" title="Which object should you change?">
+
+A Pod `api-5d8f7c9b4-x2x9q` runs the wrong image. A colleague edits the Pod and changes the image; a few minutes later, after a node restart, the old image is back. Explain what happened, and which object they should have changed.
+
+<Solution>
+
+The Pod belongs to a ReplicaSet owned by the Deployment `api`. When the Pod was replaced, the ReplicaSet created it from **its** template — which still had the old image. Change the Deployment (`kubectl set image deployment/api …` or edit the manifest and apply it); the Deployment creates a new ReplicaSet with the new template and replaces the Pods.
+
+</Solution>
+</Exercise>
+
+<Phase step="troubleshooting" />
+
+## Troubleshooting
+
+<Exercise kind="troubleshooting" title="The Pod that will not die">
+
+You run `kubectl delete pod worker-6c7d9-abc12` three times and there is always a `worker-…` Pod running. What is going on and how do you get rid of it?
+
+<Solution>
+
+A controller owns it. Find the owner (`kubectl get pod <name> -o jsonpath='{.metadata.ownerReferences[0].kind}'`), follow the chain up, and delete — or scale to zero — the top-level object: `kubectl scale deployment worker --replicas=0`, or `kubectl delete deployment worker`.
+
+</Solution>
+</Exercise>
+
+<Callout type="mistakes">
+
+- Editing or deleting Pods to change an application that a Deployment manages.
+- Expecting a Pod to keep its name or IP address after it is recreated.
+- Forgetting `-n <namespace>`: "not found" often means "you are looking in the wrong namespace".
+
+</Callout>
+
+<Phase step="check" />
+
+## Knowledge check
+
+<KnowledgeCheck
+  question="A Deployment asks for 3 replicas. A node fails and one of its Pods disappears. What happens?"
+  options={['Nothing until you run kubectl apply again', 'The ReplicaSet controller creates a replacement Pod on a healthy node', 'The failed Pod is restarted on the same node when it comes back', 'The Deployment is marked Failed']}
+  answer={1}
+  explanation="The desired state (3) no longer matches the actual state (2), so the ReplicaSet controller creates a new Pod. The scheduler places it on a healthy node."
+/>
+
+<KnowledgeCheck
+  question="Which statement about Pods is true?"
+  options={['A Pod keeps its IP address when it is recreated', 'A Pod can contain several containers that share one network address', 'Each container always gets its own Pod', 'Pods are repaired in place when they fail']}
+  answer={1}
+  explanation="Containers in a Pod share a network namespace (one IP, they reach each other on localhost) and can share volumes. Pods are replaced, never repaired, and get a new IP each time."
+/>
+
+## Clean up
+
+```bash
+kubectl delete deployment hello --ignore-not-found
+```

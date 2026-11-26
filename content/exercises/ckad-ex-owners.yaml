@@ -1,0 +1,78 @@
+id: ckad-ex-owners
+title: "Desired state in action: who brings Pods back?"
+module: ckad-first-steps
+lesson: ckad-kubernetes-for-developers
+kind: exercise
+difficulty: beginner
+minutes: 8
+order: 1
+tags: [controllers, deployments, ownerReferences]
+namespaces: [ex-intro]
+setup: |
+  kubectl -n ex-intro create deployment catalog --image=nginx:1.27 --replicas=2
+  kubectl -n ex-intro run scratch --image=busybox:1.36 -- sleep 3600
+  kubectl -n ex-intro rollout status deployment catalog --timeout=180s
+statement: |
+  Namespace `ex-intro` runs a Deployment `catalog` and a Pod `scratch` that someone created by hand.
+
+  1. List the Pods: `k -n ex-intro get pods`.
+  2. The shop expects more traffic: change the **desired state** so that `catalog` runs **3** replicas.
+  3. Delete one `catalog` Pod and watch a replacement appear (`k -n ex-intro get pods -w`, Ctrl-C to stop).
+  4. Answer the questions below. Read `metadata.ownerReferences` of the Pods to be sure.
+inputs:
+  - id: scratch-back
+    label: If you delete the Pod scratch, what happens?
+    kind: choice
+    options:
+      - { id: a, text: "A new `scratch` Pod is created by the Deployment" }
+      - { id: b, text: "It is gone for good: no controller owns it" }
+      - { id: c, text: "The kubelet restarts it on the same node" }
+  - id: owner-kind
+    label: The kind of object that directly owns a catalog Pod
+    placeholder: e.g. Deployment
+checks:
+  - id: three-replicas
+    description: catalog has 3 ready replicas
+    type: cluster
+    command: kubectl -n ex-intro get deploy catalog -o jsonpath='{.spec.replicas}/{.status.readyReplicas}'
+    expect: "3/3"
+    match: exact
+  - id: deleted-one
+    description: You deleted a catalog Pod and saw it replaced
+    type: history
+    expect: 'delete +(pods?|po)\b.*catalog|delete +(pods?|po)/catalog'
+  - id: scratch-back
+    description: You know that unowned Pods are not recreated
+    type: answer
+    input: scratch-back
+    expect: b
+  - id: owner-kind
+    description: You found the direct owner of the Pods
+    type: answer
+    input: owner-kind
+    expect: ReplicaSet
+hints:
+  - "`k -n ex-intro scale deployment catalog --replicas=3` changes the desired state."
+  - "`k -n ex-intro get pod <name> -o jsonpath='{.metadata.ownerReferences[0].kind}{\"\\n\"}'`; try it on `scratch` too — it prints nothing."
+solution: |
+  ```bash
+  k -n ex-intro scale deployment catalog --replicas=3
+  k -n ex-intro delete pod $(k -n ex-intro get pods -l app=catalog -o jsonpath='{.items[0].metadata.name}')
+  k -n ex-intro get pods -l app=catalog -o custom-columns=NAME:.metadata.name,OWNER:.metadata.ownerReferences[0].kind
+  k -n ex-intro get pod scratch -o jsonpath='{.metadata.ownerReferences}'     # empty: nobody owns it
+  ```
+
+  `catalog` Pods are owned by a **ReplicaSet**, which is owned by the Deployment. The ReplicaSet controller
+  sees 2 Pods where 3 are wanted and creates one. `scratch` has no owner: delete it and it is gone — the
+  reason real applications never run as bare Pods.
+autotest:
+  solve: |
+    kubectl -n ex-intro scale deployment catalog --replicas=3
+    kubectl -n ex-intro rollout status deployment catalog --timeout=120s
+    kubectl -n ex-intro delete pod $(kubectl -n ex-intro get pods -l app=catalog -o jsonpath='{.items[0].metadata.name}')
+    kubectl -n ex-intro rollout status deployment catalog --timeout=120s
+    sleep 3
+    kubectl -n ex-intro wait --for=condition=Ready pod -l app=catalog --timeout=120s
+  answers:
+    scratch-back: b
+    owner-kind: replicaset

@@ -1,0 +1,377 @@
+# The CKAD course: its exam domains, modules, lessons and their order.
+#
+# Same rules as courses/cka.yaml (see the header there and
+# docs/CONTENT_AUTHORING.md). Ids are global, so CKAD modules and lessons are
+# prefixed `ckad-` wherever a CKA id could collide.
+#
+# Written for someone who has never run anything on Kubernetes: the first
+# module starts from "what is a Pod". Topics the two exams share (Services,
+# ConfigMaps, rolling updates…) are taught here from the developer's side;
+# the CKA course goes deeper into how the cluster implements them.
+
+id: ckad
+code: CKAD
+title: Certified Kubernetes Application Developer
+summary: >-
+  Build, configure, deploy and debug applications on Kubernetes: Pods and workloads, multi-container
+  patterns, configuration and security, deployment strategies, probes and Services.
+audience: New to Kubernetes? Start here — the CKAD is the natural first certification, and the CKA builds on it.
+source: https://training.linuxfoundation.org/certification/certified-kubernetes-application-developer-ckad/
+
+domains:
+  - id: ckad-design-build
+    title: Application Design and Build
+    weight: 20
+    competencies:
+      - { id: ckad-db-images, text: "Define, build and modify container images" }
+      - { id: ckad-db-workloads, text: "Choose and use the right workload resource (Deployment, DaemonSet, CronJob, etc.)" }
+      - { id: ckad-db-multicontainer, text: "Understand multi-container Pod design patterns (e.g. sidecar, init and others)" }
+      - { id: ckad-db-volumes, text: Utilize persistent and ephemeral volumes }
+  - id: ckad-deployment
+    title: Application Deployment
+    weight: 20
+    competencies:
+      - { id: ckad-dep-strategies, text: "Use Kubernetes primitives to implement common deployment strategies (e.g. blue/green or canary)" }
+      - { id: ckad-dep-rolling, text: Understand Deployments and how to perform rolling updates }
+      - { id: ckad-dep-helm, text: Use the Helm package manager to deploy existing packages }
+      - { id: ckad-dep-kustomize, text: Kustomize }
+  - id: ckad-observability
+    title: Application Observability and Maintenance
+    weight: 15
+    competencies:
+      - { id: ckad-obs-deprecations, text: Understand API deprecations }
+      - { id: ckad-obs-probes, text: Implement probes and health checks }
+      - { id: ckad-obs-cli, text: Use built-in CLI tools to monitor Kubernetes applications }
+      - { id: ckad-obs-logs, text: Utilize container logs }
+      - { id: ckad-obs-debugging, text: Debugging in Kubernetes }
+  - id: ckad-env-config-security
+    title: Application Environment, Configuration and Security
+    weight: 25
+    competencies:
+      - { id: ckad-ecs-extend, text: "Discover and use resources that extend Kubernetes (CRD, Operators)" }
+      - { id: ckad-ecs-auth, text: "Understand authentication, authorization and admission control" }
+      - { id: ckad-ecs-quotas, text: "Understand requests, limits, quotas" }
+      - { id: ckad-ecs-configmaps, text: Understand ConfigMaps }
+      - { id: ckad-ecs-resources, text: Define resource requirements }
+      - { id: ckad-ecs-secrets, text: "Create & consume Secrets" }
+      - { id: ckad-ecs-serviceaccounts, text: Understand ServiceAccounts }
+      - { id: ckad-ecs-security, text: "Understand Application Security (SecurityContexts, Capabilities, etc.)" }
+  - id: ckad-services-networking
+    title: Services and Networking
+    weight: 20
+    competencies:
+      - { id: ckad-sn-netpol, text: Demonstrate basic understanding of NetworkPolicies }
+      - { id: ckad-sn-services, text: Provide and troubleshoot access to applications via services }
+      - { id: ckad-sn-ingress, text: Use Ingress rules to expose applications }
+
+modules:
+  # ---------------------------------------------------------------- foundations
+  - id: ckad-first-steps
+    domain: ckad-design-build
+    title: "First Steps: Pods, YAML and kubectl"
+    summary: What Kubernetes does for an application developer, your first Pods, and the kubectl habits the whole exam relies on.
+    objectives:
+      - Explain what a cluster, a node, a Pod and a controller are, from the application's point of view
+      - Create, inspect and delete Pods with kubectl run, get, describe, logs and exec
+      - Read and write the four top-level fields of every manifest
+      - Generate YAML with --dry-run=client and find fields with kubectl explain
+      - Organise objects with namespaces, labels and selectors
+    competencies: []
+    lessons:
+      - id: ckad-kubernetes-for-developers
+        title: "Kubernetes for developers"
+        summary: "Desired state, the API, controllers — and what that means for your app."
+        minutes: 20
+        status: published
+      - id: ckad-first-pod
+        title: "Your first Pod"
+        summary: "kubectl run, get, describe, logs and exec; the Pod lifecycle and restart policies."
+        minutes: 30
+        status: published
+      - id: ckad-manifests-kubectl
+        title: "Manifests and the fast kubectl workflow"
+        summary: "apiVersion/kind/metadata/spec, generators, --dry-run, kubectl explain, apply vs create."
+        minutes: 30
+        status: published
+      - id: ckad-namespaces-labels
+        title: "Namespaces, labels and selectors"
+        summary: "Group and find objects: namespaces, labels, selectors and annotations."
+        minutes: 25
+        status: published
+
+  # --------------------------------------------- application design & build (20%)
+  - id: ckad-container-images
+    domain: ckad-design-build
+    title: Container Images
+    summary: What an image is, how a Dockerfile builds one, and how a Pod's command and args map to ENTRYPOINT and CMD.
+    objectives:
+      - Write a Dockerfile and explain layers, tags and digests
+      - Build, tag, save and load an image with docker or podman
+      - Override an image's ENTRYPOINT and CMD from a Pod spec
+      - Choose an imagePullPolicy and use a private registry with imagePullSecrets
+    competencies: [ckad-db-images]
+    lessons:
+      - id: ckad-images-dockerfile
+        title: "Images and Dockerfiles"
+        summary: "Layers, base images, multi-stage builds, tags and digests."
+        minutes: 30
+        status: planned
+      - id: ckad-images-build
+        title: "Building, tagging and exporting images"
+        summary: "docker/podman build, tag, save as a tar archive, push to a registry."
+        minutes: 25
+        status: planned
+      - id: ckad-command-args
+        title: "command, args, ENTRYPOINT and CMD"
+        summary: "How a Pod spec overrides what the image runs; imagePullPolicy and pull secrets."
+        minutes: 20
+        status: planned
+
+  - id: ckad-workloads
+    domain: ckad-design-build
+    title: Choosing the Right Workload
+    summary: Deployments, DaemonSets, StatefulSets, Jobs and CronJobs — which controller fits which kind of application.
+    objectives:
+      - Pick the right workload resource for a stateless app, a per-node agent, a database and a batch task
+      - Run one-off and parallel batch work with Jobs (completions, parallelism, backoffLimit, deadlines)
+      - Schedule work with CronJobs and control history, concurrency and missed runs
+    competencies: [ckad-db-workloads]
+    lessons:
+      - id: ckad-workload-types
+        title: "Deployments, DaemonSets and StatefulSets"
+        summary: "What each controller guarantees, and how to tell which one a task wants."
+        minutes: 25
+        status: published
+      - id: ckad-jobs-cronjobs
+        title: "Jobs and CronJobs"
+        summary: "Run to completion, retry, run in parallel, run on a schedule."
+        minutes: 35
+        status: published
+
+  - id: ckad-multi-container
+    domain: ckad-design-build
+    title: Multi-Container Pods
+    summary: Init containers, sidecars and the other patterns that put more than one container in a Pod — and why they share a network and volumes.
+    objectives:
+      - Explain what containers in the same Pod share (network, volumes) and what they do not
+      - Use init containers to prepare data or wait for a dependency
+      - Run native sidecar containers (restartPolicy Always) and classic helper containers
+      - Recognise the sidecar, adapter and ambassador patterns
+    competencies: [ckad-db-multicontainer]
+    lessons:
+      - id: ckad-init-containers
+        title: "Init containers"
+        summary: "Run setup steps in order, before the app starts."
+        minutes: 25
+        status: published
+      - id: ckad-sidecars-patterns
+        title: "Sidecars, adapters and ambassadors"
+        summary: "Native sidecars, shared volumes and localhost, and the classic patterns."
+        minutes: 30
+        status: published
+
+  - id: ckad-volumes
+    domain: ckad-design-build
+    title: Volumes for Applications
+    summary: Give containers scratch space, configuration files and storage that outlives the Pod.
+    objectives:
+      - Use emptyDir (including memory-backed) for scratch space and sharing between containers
+      - Request persistent storage with a PersistentVolumeClaim and mount it
+      - Explain access modes and what happens to data when a Pod or claim is deleted
+    competencies: [ckad-db-volumes]
+    lessons:
+      - id: ckad-ephemeral-volumes
+        title: "Ephemeral volumes: emptyDir and friends"
+        summary: "emptyDir, projected volumes, and what disappears with the Pod."
+        minutes: 20
+        status: planned
+      - id: ckad-persistent-volumes
+        title: "PersistentVolumeClaims for developers"
+        summary: "Claim storage, mount it, and keep data across Pod restarts."
+        minutes: 30
+        status: planned
+
+  # ------------------------------------- environment, configuration & security (25%)
+  - id: ckad-configuration
+    domain: ckad-env-config-security
+    title: ConfigMaps and Secrets
+    summary: Keep configuration out of images — as environment variables or files — and handle sensitive values with Secrets.
+    objectives:
+      - Create ConfigMaps from literals, files and env files
+      - Consume configuration as env, envFrom and mounted files, and know which ones update live
+      - Create generic, TLS and docker-registry Secrets and consume them
+      - Explain why base64 is not encryption
+    competencies: [ckad-ecs-configmaps, ckad-ecs-secrets]
+    lessons:
+      - id: ckad-configmaps
+        title: "ConfigMaps"
+        summary: "Create them three ways, consume them as env or files."
+        minutes: 30
+        status: published
+      - id: ckad-secrets
+        title: "Secrets"
+        summary: "Secret types, base64, env vs volume, and what really keeps them safe."
+        minutes: 30
+        status: published
+
+  - id: ckad-resources
+    domain: ckad-env-config-security
+    title: Resource Requests, Limits and Quotas
+    summary: Tell the scheduler what your app needs, cap what it can use, and live inside a namespace's quota.
+    objectives:
+      - Set CPU and memory requests and limits and explain QoS classes
+      - Recognise OOMKilled and CPU throttling
+      - Work within a ResourceQuota and a LimitRange
+    competencies: [ckad-ecs-quotas, ckad-ecs-resources]
+    lessons:
+      - id: ckad-requests-limits
+        title: "Requests and limits"
+        summary: "Scheduling, throttling, OOMKilled and QoS classes."
+        minutes: 30
+        status: planned
+      - id: ckad-quotas-limitranges
+        title: "ResourceQuotas and LimitRanges"
+        summary: "Namespace budgets and default resources — and the errors they produce."
+        minutes: 25
+        status: planned
+
+  - id: ckad-security
+    domain: ckad-env-config-security
+    title: Application Security
+    summary: Who your Pod is (ServiceAccounts), what it may do (RBAC), what admission allows, and how it runs (security contexts and capabilities).
+    objectives:
+      - Run Pods as non-root with a read-only root filesystem and dropped capabilities
+      - Create a ServiceAccount, bind it to a Role and use it from a Pod
+      - Explain the path of a request through authentication, authorization and admission
+    competencies: [ckad-ecs-security, ckad-ecs-serviceaccounts, ckad-ecs-auth]
+    lessons:
+      - id: ckad-security-contexts
+        title: "Security contexts and capabilities"
+        summary: "runAsUser, runAsNonRoot, readOnlyRootFilesystem, allowPrivilegeEscalation, capabilities."
+        minutes: 30
+        status: planned
+      - id: ckad-serviceaccounts
+        title: "ServiceAccounts and tokens"
+        summary: "The identity of a Pod, projected tokens and automountServiceAccountToken."
+        minutes: 25
+        status: planned
+      - id: ckad-auth-admission
+        title: "Authentication, RBAC and admission for developers"
+        summary: "Why a request is denied, kubectl auth can-i, and admission errors."
+        minutes: 30
+        status: planned
+
+  - id: ckad-extending
+    domain: ckad-env-config-security
+    title: Custom Resources and Operators
+    summary: Discover the APIs a cluster offers beyond the built-ins and use custom resources like any other object.
+    objectives:
+      - List and explain API resources, including custom ones
+      - Create instances of a CustomResourceDefinition
+      - Explain what an operator adds on top of a CRD
+    competencies: [ckad-ecs-extend]
+    lessons:
+      - id: ckad-crds-operators
+        title: "CRDs and operators"
+        summary: "kubectl api-resources, explain on custom kinds, and the operator pattern."
+        minutes: 25
+        status: planned
+
+  # ------------------------------------------------- application deployment (20%)
+  - id: ckad-rollouts
+    domain: ckad-deployment
+    title: Deployments, Rolling Updates and Strategies
+    summary: Ship new versions without downtime, roll back bad ones, and build blue/green and canary releases from plain Kubernetes objects.
+    objectives:
+      - Update, pause, resume and undo a Deployment rollout
+      - Tune maxSurge and maxUnavailable, or use Recreate
+      - Implement blue/green with a Service selector switch and canary with replica ratios
+    competencies: [ckad-dep-rolling, ckad-dep-strategies]
+    lessons:
+      - id: ckad-rolling-updates
+        title: "Rolling updates and rollbacks"
+        summary: "kubectl set image, rollout status/history/undo, and strategy settings."
+        minutes: 30
+        status: planned
+      - id: ckad-blue-green-canary
+        title: "Blue/green and canary deployments"
+        summary: "Two Deployments, one Service: switch or split traffic with labels."
+        minutes: 30
+        status: planned
+
+  - id: ckad-helm-kustomize
+    domain: ckad-deployment
+    title: Helm and Kustomize
+    summary: Install existing packages with Helm and customise plain manifests per environment with Kustomize.
+    objectives:
+      - Add a repository, search, install, upgrade, roll back and uninstall a Helm release
+      - Override chart values and inspect what a release rendered
+      - Build overlays with kustomization.yaml and apply them with kubectl -k
+    competencies: [ckad-dep-helm, ckad-dep-kustomize]
+    lessons:
+      - id: ckad-helm-basics
+        title: "Using Helm charts"
+        summary: "repo add, install --set/-f, upgrade, rollback, list, get values."
+        minutes: 30
+        status: planned
+      - id: ckad-kustomize
+        title: "Kustomize"
+        summary: "Bases, overlays, patches, generators and kubectl apply -k."
+        minutes: 30
+        status: planned
+
+  # ------------------------------------- observability & maintenance (15%)
+  - id: ckad-observability
+    domain: ckad-observability
+    title: Probes, Logs and Debugging
+    summary: Tell Kubernetes when your app is healthy, read what it says, and find out why it is not working.
+    objectives:
+      - Configure liveness, readiness and startup probes (HTTP, TCP, exec, gRPC)
+      - Read logs of current, previous and specific containers
+      - Debug with describe, events, exec, port-forward and kubectl debug
+      - Monitor usage with kubectl top
+      - Find and migrate deprecated API versions
+    competencies: [ckad-obs-probes, ckad-obs-logs, ckad-obs-debugging, ckad-obs-cli, ckad-obs-deprecations]
+    lessons:
+      - id: ckad-probes
+        title: "Liveness, readiness and startup probes"
+        summary: "What each probe controls and how to choose the thresholds."
+        minutes: 35
+        status: planned
+      - id: ckad-logs-debugging
+        title: "Logs and debugging Pods"
+        summary: "logs --previous, events, exec, port-forward, kubectl debug."
+        minutes: 35
+        status: planned
+      - id: ckad-monitoring-deprecations
+        title: "kubectl top and API deprecations"
+        summary: "Resource usage from metrics-server; spotting and fixing removed API versions."
+        minutes: 25
+        status: planned
+
+  # -------------------------------------------------- services & networking (20%)
+  - id: ckad-networking
+    domain: ckad-services-networking
+    title: Services, Ingress and NetworkPolicies
+    summary: Give your app a stable address, expose it over HTTP, and control who may talk to it.
+    objectives:
+      - Expose Deployments with ClusterIP and NodePort Services and fix selector and port mistakes
+      - Route HTTP paths and hosts to Services with Ingress rules
+      - Write NetworkPolicies that allow only the traffic an app needs
+    competencies: [ckad-sn-services, ckad-sn-ingress, ckad-sn-netpol]
+    lessons:
+      - id: ckad-services
+        title: "Services for your app"
+        summary: "ClusterIP, NodePort, ports vs targetPorts, DNS names and the usual mistakes."
+        minutes: 30
+        status: planned
+      - id: ckad-ingress
+        title: "Ingress rules"
+        summary: "Hosts, paths, pathType and the ingress class."
+        minutes: 25
+        status: planned
+      - id: ckad-network-policies
+        title: "NetworkPolicies"
+        summary: "Default deny, allow from labels and namespaces, and egress for DNS."
+        minutes: 35
+        status: planned

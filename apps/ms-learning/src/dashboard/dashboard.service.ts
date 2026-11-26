@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { DashboardDto, DomainProgressDto, ExamDomainId } from '@cka/contracts';
+import type { CourseProgressDto, DashboardDto, DomainProgressDto, ExamDomainId } from '@cka/contracts';
 import { ExamsService } from '../assessments/exams.service';
 import { ExercisesService } from '../assessments/exercises.service';
 import { LabsService } from '../assessments/labs.service';
@@ -34,24 +34,47 @@ export class DashboardService {
       this.exams.history(userId),
       this.exercises.completedIds(userId),
     ]);
+    const labIds = new Set(this.content.labs.map(l => l.id));
+    const lastVisited = recent[0] ? this.content.lesson(recent[0].lessonId) : undefined;
+    const ctx: UserState = { completed, best, labProgress, examHistory, exercisesDone };
+    const courses = this.content.courses.map(c => this.course(c.id, ctx));
+    const currentCourseId = lastVisited ? (this.content.module(lastVisited.moduleId)?.courseId ?? null) : null;
+    const current = courses.find(c => c.courseId === currentCourseId) ?? courses[0];
+    const nextLesson = current?.nextLessonId ? this.content.lesson(current.nextLessonId) : undefined;
 
+    return {
+      courses,
+      currentCourseId,
+      currentModuleId: lastVisited?.moduleId ?? nextLesson?.moduleId ?? null,
+      recent,
+      inProgressLabs: labProgress.filter(p => p.status === 'IN_PROGRESS' && labIds.has(p.labId)).map(p => p.labId),
+      recentQuizAttempts: quizHistory.slice(0, 5),
+    };
+  }
+
+  private course(courseId: string, u: UserState): CourseProgressDto {
     const curriculum = this.content.curriculum;
-    const ordered = this.content.orderedLessons;
+    const modules = this.content.modulesOf(courseId);
+    const moduleIds = new Set(modules.map(m => m.id));
+    const ordered = modules.flatMap(m => m.lessons);
     const published = ordered.filter(l => l.status === 'published');
+    const { completed, best } = u;
 
-    const domains: DomainProgressDto[] = curriculum.domains.map(d => {
-      const modules = curriculum.modules.filter(m => m.domain === d.id);
-      const lessons = modules.flatMap(m => m.lessons).filter(l => l.status === 'published');
-      const quizScores = modules.flatMap(m => m.quizzes).map(q => best.get(q.id)).filter((s): s is number => s !== undefined);
-      return {
-        domain: d.id,
-        title: d.title,
-        weight: d.weight,
-        lessonsPublished: lessons.length,
-        lessonsCompleted: lessons.filter(l => completed.has(l.id)).length,
-        quizAverage: quizScores.length ? Math.round(quizScores.reduce((a, b) => a + b, 0) / quizScores.length) : null,
-      };
-    });
+    const domains: DomainProgressDto[] = curriculum.domains
+      .filter(d => d.courseId === courseId)
+      .map(d => {
+        const inDomain = modules.filter(m => m.domain === d.id);
+        const lessons = inDomain.flatMap(m => m.lessons).filter(l => l.status === 'published');
+        const quizScores = inDomain.flatMap(m => m.quizzes).map(q => best.get(q.id)).filter((s): s is number => s !== undefined);
+        return {
+          domain: d.id,
+          title: d.title,
+          weight: d.weight,
+          lessonsPublished: lessons.length,
+          lessonsCompleted: lessons.filter(l => completed.has(l.id)).length,
+          quizAverage: quizScores.length ? Math.round(quizScores.reduce((a, b) => a + b, 0) / quizScores.length) : null,
+        };
+      });
 
     // Readiness: per domain, half reading coverage, half quiz performance,
     // weighted by the official exam weights. Deliberately conservative — an
@@ -64,7 +87,7 @@ export class DashboardService {
       }, 0),
     );
 
-    const weakAreas: DashboardDto['weakAreas'] = [];
+    const weakAreas: CourseProgressDto['weakAreas'] = [];
     for (const d of domains) {
       if (d.weight === 0) continue; // tracks beyond the exam are never "weak areas"
       if (d.quizAverage !== null && d.quizAverage < WEAK_QUIZ_PERCENT) {
@@ -74,31 +97,33 @@ export class DashboardService {
       }
     }
 
-    // Next lesson: first published, not-completed lesson whose prerequisites are done.
-    const next = published.find(l => !completed.has(l.id) && l.prerequisites.every(p => completed.has(p) || !published.some(x => x.id === p)));
-    const lastVisited = recent[0] ? this.content.lesson(recent[0].lessonId) : undefined;
+    // Next lesson: first published, not-completed lesson whose prerequisites
+    // are done (prerequisites that are not published yet do not block).
+    const isPublished = (id: string) => this.content.orderedLessons.some(x => x.id === id && x.status === 'published');
+    const next = published.find(l => !completed.has(l.id) && l.prerequisites.every(p => completed.has(p) || !isPublished(p)));
 
-    const labIds = new Set(this.content.labs.map(l => l.id));
-    const lastExamAttempt = examHistory.find(a => a.submittedAt !== null);
+    const labs = this.content.labs.filter(l => moduleIds.has(l.module));
+    const labIds = new Set(labs.map(l => l.id));
+    const exercises = this.content.exercises.filter(e => moduleIds.has(e.module));
+    const quizzes = this.content.quizzes.filter(q => moduleIds.has(q.module));
+    const examIds = new Set(this.content.exams.filter(e => e.course === courseId).map(e => e.id));
+    const lastExamAttempt = u.examHistory.find(a => a.submittedAt !== null && examIds.has(a.examId));
 
     return {
+      courseId,
       totals: {
         lessonsPublished: published.length,
         lessonsCompleted: published.filter(l => completed.has(l.id)).length,
         lessonsPlanned: ordered.length - published.length,
-        labsCompleted: labProgress.filter(p => p.status === 'COMPLETED' && labIds.has(p.labId)).length,
+        labsCompleted: u.labProgress.filter(p => p.status === 'COMPLETED' && labIds.has(p.labId)).length,
         labsTotal: labIds.size,
-        exercisesCompleted: this.content.exercises.filter(e => exercisesDone.has(e.id)).length,
-        exercisesTotal: this.content.exercises.length,
-        quizzesPassed: this.content.quizzes.filter(q => (best.get(q.id) ?? 0) >= q.passPercent).length,
-        quizzesTotal: this.content.quizzes.length,
+        exercisesCompleted: exercises.filter(e => u.exercisesDone.has(e.id)).length,
+        exercisesTotal: exercises.length,
+        quizzesPassed: quizzes.filter(q => (best.get(q.id) ?? 0) >= q.passPercent).length,
+        quizzesTotal: quizzes.length,
       },
       domains,
-      currentModuleId: lastVisited?.moduleId ?? next?.moduleId ?? null,
       nextLessonId: next?.id ?? null,
-      recent,
-      inProgressLabs: labProgress.filter(p => p.status === 'IN_PROGRESS' && labIds.has(p.labId)).map(p => p.labId),
-      recentQuizAttempts: quizHistory.slice(0, 5),
       weakAreas: weakAreas.sort((a, b) => weightOf(domains, b.domain) - weightOf(domains, a.domain)),
       lastExam: lastExamAttempt
         ? {
@@ -111,6 +136,14 @@ export class DashboardService {
       readiness,
     };
   }
+}
+
+interface UserState {
+  completed: Set<string>;
+  best: Map<string, number>;
+  labProgress: Awaited<ReturnType<LabsService['listProgress']>>;
+  examHistory: Awaited<ReturnType<ExamsService['history']>>;
+  exercisesDone: Set<string>;
 }
 
 const weightOf = (domains: DomainProgressDto[], id: ExamDomainId) => domains.find(d => d.domain === id)?.weight ?? 0;

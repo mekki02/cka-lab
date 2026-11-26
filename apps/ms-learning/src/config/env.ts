@@ -35,7 +35,7 @@ export class Env {
   @IsUrl({ require_tld: false, require_protocol: true })
   JWKS_URL = 'http://localhost:3001/.well-known/jwks.json';
 
-  /** Directory holding curriculum.yaml, labs/, quizzes/, exams/, cheatsheets/. */
+  /** Directory holding curriculum.yaml, courses/, labs/, quizzes/, exams/, cheatsheets/. */
   @IsString() CONTENT_DIR = join(process.cwd(), 'content');
 }
 

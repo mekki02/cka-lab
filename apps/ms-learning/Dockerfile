@@ -60,6 +60,7 @@ COPY --from=build --chown=node:node /repo/apps/ms-learning/package.json ./apps/m
 COPY --from=build --chown=node:node /repo/apps/ms-learning/dist ./apps/ms-learning/dist
 # Only what the service serves: lesson bodies (MDX) ship in the web image.
 COPY --from=build --chown=node:node /repo/content/curriculum.yaml ./content/
+COPY --from=build --chown=node:node /repo/content/courses ./content/courses
 COPY --from=build --chown=node:node /repo/content/labs ./content/labs
 COPY --from=build --chown=node:node /repo/content/exercises ./content/exercises
 COPY --from=build --chown=node:node /repo/content/quizzes ./content/quizzes

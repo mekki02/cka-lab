@@ -12,22 +12,7 @@ import { z } from 'zod';
 const id = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'ids are kebab-case: lowercase letters, digits, dashes');
 const markdown = z.string().min(1);
 
-/** The five official CKA exam domains. */
-export const EXAM_DOMAIN_IDS = [
-  'cluster-architecture',
-  'workloads-scheduling',
-  'services-networking',
-  'storage',
-  'troubleshooting',
-] as const;
-
-/**
- * All domains: the exam domains plus extra tracks that go beyond the exam
- * (weight 0 — they never count toward exam readiness).
- */
-export const DOMAIN_IDS = [...EXAM_DOMAIN_IDS, 'platform-tools'] as const;
-
-// --- curriculum.yaml -------------------------------------------------------
+// --- curriculum.yaml + courses/<id>.yaml -----------------------------------
 
 export const LessonSchema = z
   .object({
@@ -45,7 +30,8 @@ export const LessonSchema = z
 export const ModuleSchema = z
   .object({
     id,
-    domain: z.enum(DOMAIN_IDS),
+    /** A domain of the same course. */
+    domain: id,
     title: z.string().min(3),
     summary: z.string().min(10),
     objectives: z.array(z.string().min(5)).min(1),
@@ -58,25 +44,39 @@ export const ModuleSchema = z
   })
   .strict();
 
-export const CurriculumSchema = z
+export const DomainSchema = z
+  .object({
+    id,
+    title: z.string(),
+    /** Official exam weight in percent; 0 for tracks beyond the exam. */
+    weight: z.number().int().min(0).max(100),
+    competencies: z.array(z.object({ id, text: z.string() }).strict()).default([]),
+  })
+  .strict();
+
+/** content/courses/<id>.yaml: one certification track. */
+export const CourseSchema = z
+  .object({
+    id,
+    /** Short exam code shown in the UI: "CKA", "CKAD". */
+    code: z.string().regex(/^[A-Z0-9-]{2,12}$/),
+    title: z.string().min(3),
+    summary: z.string().min(10),
+    /** Who the course is for / where to start. */
+    audience: z.string().min(10),
+    source: z.string().url(),
+    domains: z.array(DomainSchema).min(1),
+    modules: z.array(ModuleSchema).min(1),
+  })
+  .strict();
+
+/** content/curriculum.yaml: the catalogue. */
+export const CatalogSchema = z
   .object({
     version: z.string(),
     kubernetesVersion: z.string().regex(/^1\.\d+$/),
-    source: z.string().url(),
-    domains: z
-      .array(
-        z
-          .object({
-            id: z.enum(DOMAIN_IDS),
-            title: z.string(),
-            /** Official exam weight in percent; 0 for tracks beyond the exam. */
-            weight: z.number().int().min(0).max(100),
-            competencies: z.array(z.object({ id, text: z.string() }).strict()).default([]),
-          })
-          .strict(),
-      )
-      .min(EXAM_DOMAIN_IDS.length),
-    modules: z.array(ModuleSchema).min(1),
+    /** Course ids in display order; each is content/courses/<id>.yaml. */
+    courses: z.array(id).min(1),
   })
   .strict();
 
@@ -373,6 +373,8 @@ export const QuizSchema = z
 export const ExamSchema = z
   .object({
     id,
+    /** The course this mock exam belongs to. */
+    course: id,
     title: z.string(),
     description: markdown,
     durationMinutes: z.number().int().positive(),
@@ -384,7 +386,8 @@ export const ExamSchema = z
           .object({
             id,
             title: z.string(),
-            domain: z.enum(DOMAIN_IDS),
+            /** A domain of the exam's course. */
+            domain: id,
             points: z.number().int().positive(),
             /** e.g. `kubectl config use-context kind-cka` */
             context: z.string(),
@@ -431,7 +434,8 @@ export const CheatsheetSchema = z
   })
   .strict();
 
-export type CurriculumFile = z.infer<typeof CurriculumSchema>;
+export type CourseFile = z.infer<typeof CourseSchema>;
+export type Catalog = z.infer<typeof CatalogSchema>;
 export type Lab = z.infer<typeof LabSchema>;
 export type Exercise = z.infer<typeof ExerciseSchema>;
 export type ExerciseCheck = z.infer<typeof ExerciseCheckSchema>;

@@ -4,6 +4,8 @@ import { useState } from 'react';
 import { EmptyState, ErrorState, Loading, PageHeader } from '@/components/states';
 import { LABS_ENABLED } from '@/config';
 import { useCurriculum } from '@/hooks/useCurriculum';
+import { useSelectedCourse } from '@/hooks/useSelectedCourse';
+import { CourseSwitcher } from '@/components/CourseSwitcher';
 import { ExerciseList, useExerciseStatus } from './ExerciseList';
 
 type Filter = 'all' | 'todo' | 'done' | 'challenge';
@@ -13,26 +15,29 @@ export const ExercisesPage = () => {
   const { index, error, isLoading, refetch } = useCurriculum();
   const status = useExerciseStatus();
   const [filter, setFilter] = useState<Filter>('all');
+  const { course } = useSelectedCourse();
 
   if (error) return <ErrorState error={error} onRetry={refetch} />;
-  if (isLoading || !index) return <Loading />;
+  if (isLoading || !index || !course) return <Loading />;
 
-  const all = index.curriculum.modules.flatMap(m => m.exercises);
+  const courseModules = index.modulesOf(course.id);
+  const all = courseModules.flatMap(m => m.exercises);
   const done = all.filter(e => status.get(e.id) === 'COMPLETED').length;
   const keep = (id: string, kind: string) =>
     filter === 'all' ||
     (filter === 'done' && status.get(id) === 'COMPLETED') ||
     (filter === 'todo' && status.get(id) !== 'COMPLETED') ||
     (filter === 'challenge' && kind === 'challenge');
-  const modules = index.curriculum.modules
+  const modules = courseModules
     .map(m => ({ m, exercises: m.exercises.filter(e => keep(e.id, e.kind)) }))
     .filter(x => x.exercises.length > 0);
 
   return (
     <Box sx={{ maxWidth: 1100, mx: 'auto' }}>
       <PageHeader
-        overline="Practice"
+        overline={`${course.code} practice`}
         title="Exercises"
+        actions={<CourseSwitcher />}
         subtitle={
           LABS_ENABLED
             ? 'Short tasks on a real cluster, graded automatically. Each one sets up its own starting state — often something broken — in your playground: read the statement, work in the terminal, answer, and press Validate.'

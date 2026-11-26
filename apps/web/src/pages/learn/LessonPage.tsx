@@ -30,6 +30,7 @@ import { errorMessage } from '@/api/baseQuery';
 import { EmptyState, ErrorState, Loading } from '@/components/states';
 import { proseSx } from '@/components/prose';
 import { useCurriculum, useProgressIndex } from '@/hooks/useCurriculum';
+import { selectCourse } from '@/hooks/useSelectedCourse';
 import { mdxComponents } from '@/lessons/mdx-components';
 import { useTerminalDockOpen } from '@/labs/terminalBridge';
 import { StatusIcon } from './ModulePage';
@@ -91,6 +92,11 @@ export const LessonPage = () => {
     !!body.Body,
   );
 
+  const courseId = lesson ? index?.modules.get(lesson.moduleId)?.courseId : undefined;
+  useEffect(() => {
+    if (courseId) selectCourse(courseId);
+  }, [courseId]);
+
   useEffect(() => {
     if (published) visit(lessonId).catch(() => undefined);
     window.scrollTo({ top: 0 });
@@ -108,7 +114,8 @@ export const LessonPage = () => {
   const m = index.modules.get(moduleId);
   if (!lesson || !m || lesson.moduleId !== m.id) return <EmptyState title="Lesson not found">This lesson does not exist.</EmptyState>;
 
-  const order = index.published;
+  // Previous/next stay inside the lesson's course.
+  const order = index.published.filter(l => index.modules.get(l.moduleId)?.courseId === m.courseId);
   const pos = order.findIndex(l => l.id === lesson.id);
   const prev = pos > 0 ? order[pos - 1] : undefined;
   const next = pos >= 0 ? order[pos + 1] : undefined;
@@ -160,8 +167,8 @@ export const LessonPage = () => {
       {/* Lesson */}
       <Box component="article" sx={{ minWidth: 0, maxWidth: 820, width: '100%', mx: 'auto' }}>
         <Breadcrumbs sx={{ mb: 2 }}>
-          <Link component={RouterLink} to="/learn" underline="hover" color="inherit">
-            Course
+          <Link component={RouterLink} to={`/learn?course=${m.courseId}`} underline="hover" color="inherit">
+            {index.courses.get(m.courseId)?.code ?? 'Course'}
           </Link>
           <Link component={RouterLink} to={`/learn/${m.id}`} underline="hover" color="inherit">
             {m.title}

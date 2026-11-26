@@ -1,0 +1,138 @@
+id: ckad-multi-container-challenge
+title: "Challenge: the Job that never finishes"
+module: ckad-multi-container
+kind: challenge
+difficulty: intermediate
+minutes: 15
+order: 1
+tags: [native-sidecar, jobs, debugging]
+namespaces: [ex-export]
+files:
+  - path: export.yaml
+    content: |
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: export
+        namespace: ex-export
+      spec:
+        backoffLimit: 0
+        template:
+          spec:
+            restartPolicy: Never
+            containers:
+            - name: export
+              image: busybox:1.36
+              command: ["sh", "-c", "for i in 1 2 3 4 5; do echo \"step $i/5\" >> /out/progress.log; sleep 2; done; echo done >> /out/progress.log"]
+              volumeMounts:
+              - name: out
+                mountPath: /out
+            - name: progress
+              image: busybox:1.36
+              command: ["sh", "-c", "touch /out/progress.log; tail -F /out/progress.log"]
+              volumeMounts:
+              - name: out
+                mountPath: /out
+            volumes:
+            - name: out
+              emptyDir: {}
+setup: |
+  cat <<'YAML' | kubectl apply -f -
+  apiVersion: batch/v1
+  kind: Job
+  metadata:
+    name: export
+    namespace: ex-export
+  spec:
+    backoffLimit: 0
+    template:
+      spec:
+        restartPolicy: Never
+        containers:
+        - name: export
+          image: busybox:1.36
+          command: ["sh", "-c", "for i in 1 2 3 4 5; do echo \"step $i/5\" >> /out/progress.log; sleep 2; done; echo done >> /out/progress.log"]
+          volumeMounts:
+          - name: out
+            mountPath: /out
+        - name: progress
+          image: busybox:1.36
+          command: ["sh", "-c", "touch /out/progress.log; tail -F /out/progress.log"]
+          volumeMounts:
+          - name: out
+            mountPath: /out
+        volumes:
+        - name: out
+          emptyDir: {}
+  YAML
+statement: |
+  The Job `export` in namespace `ex-export` (manifest in `~/ckad-multi-container-challenge/export.yaml`)
+  should take about 10 seconds. It has been "running" for much longer.
+
+  1. Find out why it never completes.
+  2. Fix it **in the manifest file** and re-create the Job so that it **completes**, while `progress` still
+     streams `/out/progress.log` to its standard output for the whole run.
+
+  Note: a Job's Pod template cannot be changed in place.
+checks:
+  - id: file
+    description: export.yaml declares progress as a native sidecar
+    type: file
+    path: ckad-multi-container-challenge/export.yaml
+    expect: 'initContainers:[\s\S]*name: progress[\s\S]*restartPolicy: Always|initContainers:[\s\S]*restartPolicy: Always[\s\S]*name: progress'
+    match: regex
+  - id: native
+    description: In the cluster, progress is an init container with restartPolicy Always
+    type: cluster
+    command: kubectl -n ex-export get job export -o jsonpath='{.spec.template.spec.initContainers[?(@.name=="progress")].restartPolicy}'
+    expect: Always
+    match: exact
+  - id: complete
+    description: Job export completed
+    type: cluster
+    command: kubectl -n ex-export get job export -o jsonpath='{.status.succeeded}'
+    expect: "1"
+    match: number
+  - id: streamed
+    description: progress streamed the whole run
+    type: cluster
+    command: kubectl -n ex-export logs job/export -c progress
+    expect: 'step 1/5[\s\S]*step 5/5'
+    match: regex
+hints:
+  - "`k -n ex-export get pods` shows `READY 1/2`; `k -n ex-export describe pod -l job-name=export` shows which container terminated."
+  - "A Pod is only finished when **all** its regular containers have exited. Native sidecars (init containers with `restartPolicy: Always`) are stopped automatically when the main containers are done."
+  - "Move `progress` from `containers:` into a new `initContainers:` list and add `restartPolicy: Always` to it. Then `k replace --force -f export.yaml`."
+solution: |
+  `export` exits after 10 seconds, but `progress` runs `tail -F` forever. A Pod succeeds only when all its
+  regular containers have terminated, so the Job waits forever.
+
+  ```yaml
+  spec:
+    template:
+      spec:
+        restartPolicy: Never
+        initContainers:
+        - name: progress
+          image: busybox:1.36
+          restartPolicy: Always            # native sidecar
+          command: ["sh", "-c", "touch /out/progress.log; tail -F /out/progress.log"]
+          volumeMounts:
+          - name: out
+            mountPath: /out
+        containers:
+        - name: export
+          …
+  ```
+
+  ```bash
+  k replace --force -f ~/ckad-multi-container-challenge/export.yaml
+  k -n ex-export wait --for=condition=complete job/export --timeout=60s
+  k -n ex-export logs job/export -c progress
+  ```
+autotest:
+  solve: |
+    f=~/ckad-multi-container-challenge/export.yaml
+    yq -i '.spec.template.spec.initContainers = [.spec.template.spec.containers[] | select(.name == "progress")] | .spec.template.spec.initContainers[0].restartPolicy = "Always" | del(.spec.template.spec.containers[] | select(.name == "progress"))' $f
+    kubectl replace --force -f $f
+    kubectl -n ex-export wait --for=condition=complete job/export --timeout=120s

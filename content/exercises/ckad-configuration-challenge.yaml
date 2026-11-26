@@ -1,0 +1,108 @@
+id: ckad-configuration-challenge
+title: "Challenge: checkout will not start"
+module: ckad-configuration
+kind: challenge
+difficulty: intermediate
+minutes: 20
+order: 1
+tags: [configmaps, secrets, debugging, deployments]
+namespaces: [ex-checkout]
+setup: |
+  kubectl -n ex-checkout create secret generic checkout-secret --from-literal=apikey=pk_live_7Qa2
+  cat <<'YAML' | kubectl apply -f -
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: checkout
+    namespace: ex-checkout
+  spec:
+    replicas: 2
+    selector:
+      matchLabels: { app: checkout }
+    template:
+      metadata:
+        labels: { app: checkout }
+      spec:
+        containers:
+        - name: checkout
+          image: busybox:1.36
+          command: ["sh", "-c", "echo \"paying via $PAYMENT_URL with key $(cat /etc/checkout/api-key)\"; sleep 3600"]
+          env:
+          - name: PAYMENT_URL
+            valueFrom:
+              configMapKeyRef:
+                name: checkout-config
+                key: PAYMENT_URL
+          volumeMounts:
+          - name: key
+            mountPath: /etc/checkout
+            readOnly: true
+        volumes:
+        - name: key
+          secret:
+            secretName: checkout-secret
+            items:
+            - key: api-key
+              path: api-key
+  YAML
+statement: |
+  The Deployment `checkout` in namespace `ex-checkout` was deployed this morning and none of its Pods
+  has ever started.
+
+  Make it work **without changing the Deployment**:
+
+  - its Pods must become Ready (2/2 replicas available);
+  - `PAYMENT_URL` must be `https://pay.example.com/v2`;
+  - the file `/etc/checkout/api-key` must contain the API key that is **already stored** in the cluster.
+
+checks:
+  - id: available
+    description: checkout has 2 available replicas
+    type: cluster
+    command: kubectl -n ex-checkout get deploy checkout -o jsonpath='{.status.availableReplicas}'
+    expect: "2"
+    match: number
+  - id: unchanged
+    description: The Deployment was not changed (generation 1)
+    type: cluster
+    command: kubectl -n ex-checkout get deploy checkout -o jsonpath='{.metadata.generation}'
+    expect: "1"
+    match: exact
+  - id: url
+    description: checkout-config provides PAYMENT_URL
+    type: cluster
+    command: kubectl -n ex-checkout get cm checkout-config -o jsonpath='{.data.PAYMENT_URL}'
+    expect: https://pay.example.com/v2
+    match: exact
+  - id: output
+    description: The app reports the right URL and key
+    type: cluster
+    command: kubectl -n ex-checkout logs deploy/checkout
+    expect: paying via https://pay.example.com/v2 with key pk_live_7Qa2
+    match: contains
+hints:
+  - "`k -n ex-checkout describe pod -l app=checkout | tail` — the events name what is missing. There are **two** problems."
+  - "The Secret exists, but look at its keys: `k -n ex-checkout get secret checkout-secret -o jsonpath='{.data}'`."
+  - "Re-create the Secret with the key the Deployment expects, keeping the stored value: decode it first. Pods retry on their own once everything exists."
+solution: |
+  ```bash
+  k -n ex-checkout get pods                                  # ContainerCreating, for ever
+  k -n ex-checkout describe pod -l app=checkout | tail -5    # MountVolume.SetUp failed … couldn't find key api-key
+  # Volumes are mounted before the container is configured: once the Secret is fixed, the next error is
+  # CreateContainerConfigError: configmap "checkout-config" not found.
+  k -n ex-checkout create cm checkout-config --from-literal=PAYMENT_URL=https://pay.example.com/v2
+
+  k -n ex-checkout get secret checkout-secret -o jsonpath='{.data}'      # {"apikey":"…"} — not "api-key"
+  KEY=$(k -n ex-checkout get secret checkout-secret -o jsonpath='{.data.apikey}' | base64 -d)
+  k -n ex-checkout create secret generic checkout-secret --from-literal=api-key="$KEY" $do | k apply -f -
+  ```
+
+  `k apply` replaces the Secret's `data` with the new key (the old `apikey` disappears — fine here, nothing
+  else uses it). The kubelet keeps retrying the containers, so the Pods start by themselves within a short
+  time; `k -n ex-checkout rollout restart deploy checkout` would also work but changes the Deployment.
+autotest:
+  solve: |
+    kubectl -n ex-checkout create cm checkout-config --from-literal=PAYMENT_URL=https://pay.example.com/v2
+    KEY=$(kubectl -n ex-checkout get secret checkout-secret -o jsonpath='{.data.apikey}' | base64 -d)
+    kubectl -n ex-checkout create secret generic checkout-secret --from-literal=api-key="$KEY" --dry-run=client -o yaml | kubectl apply -f -
+    kubectl -n ex-checkout rollout status deploy checkout --timeout=240s

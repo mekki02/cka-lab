@@ -1,0 +1,276 @@
+---
+id: ckad-manifests-kubectl
+---
+
+Commands like `kubectl run` are quick, but real applications — and most exam tasks — need fields no flag can set. This lesson teaches you to read any manifest, to **generate** YAML instead of typing it, and to find the right field in seconds with `kubectl explain`. These habits save more exam time than any other skill.
+
+<Phase step="theory" />
+
+## The four fields of every object
+
+Every Kubernetes manifest has the same top-level shape:
+
+```yaml
+apiVersion: v1          # which API group/version defines this kind (Pod: v1, Deployment: apps/v1)
+kind: Pod               # what type of object
+metadata:               # identity: name, namespace, labels, annotations
+  name: web
+  labels:
+    app: web
+spec:                   # what you want — differs per kind
+  containers:
+    - name: web
+      image: nginx:1.27
+      ports:
+        - containerPort: 80
+```
+
+When the object exists, the API adds a fifth field, **`status`** — what is really happening. You write `spec`; controllers write `status`.
+
+## YAML in 60 seconds
+
+| Rule | Example |
+|---|---|
+| Indentation is **spaces** (2 by convention), never tabs | `  name: web` |
+| `key: value` is a map entry | `image: nginx:1.27` |
+| `- ` starts a list item | `containers:` then `  - name: web` |
+| Strings rarely need quotes, but numbers-that-are-strings and `*` do | `value: "8080"`, `schedule: "*/5 * * * *"` |
+| `|` keeps line breaks (scripts, files) | `command: ["sh", "-c"]` + `args: [ "|" … ]` |
+| `---` separates several objects in one file | |
+
+Most "invalid YAML" errors in the exam are a list item indented one level wrong.
+
+## create vs apply
+
+| Command | Behaviour |
+|---|---|
+| `kubectl create -f x.yaml` | Creates; fails if the object exists |
+| `kubectl apply -f x.yaml` | Creates or updates to match the file — the declarative way |
+| `kubectl replace --force -f x.yaml` | Deletes and recreates — for fields that cannot be changed in place (most of a Pod's spec) |
+
+<Phase step="visualization" />
+
+## The fast path
+
+<Diagram
+  caption="Generate, edit only what the generator cannot set, apply, verify."
+  chart={`flowchart LR
+    A["k run / k create … --dry-run=client -o yaml > task.yaml"] --> B["vim task.yaml"]
+    B --> C["k apply -f task.yaml"]
+    C --> D["k get / describe: verify"]
+    D -- "wrong" --> B
+    E["k explain kind.field"] -.-> B`}
+/>
+
+<Phase step="command-line" />
+
+## Generate YAML with --dry-run=client
+
+`--dry-run=client -o yaml` prints the object kubectl **would** send, without sending it. The playground (like most exam setups people use) has a shortcut variable:
+
+```bash
+export do="--dry-run=client -o yaml"      # already set in the playground
+
+k run web --image=nginx:1.27 --port=80 $do > web.yaml
+k create deployment api --image=nginx:1.27 --replicas=3 $do > api.yaml
+k create job backup --image=busybox:1.36 $do -- sh -c 'date' > job.yaml
+```
+
+<Terminal
+  command="k run web --image=nginx:1.27 --port=80 --labels=app=web,tier=frontend $do"
+  output={`apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: web
+    tier: frontend
+  name: web
+spec:
+  containers:
+  - image: nginx:1.27
+    name: web
+    ports:
+    - containerPort: 80
+    resources: {}
+  dnsPolicy: ClusterFirst
+  restartPolicy: Always
+status: {}`}
+/>
+
+`resources: {}` and `status: {}` are harmless leftovers — leave them or delete them.
+
+## Find fields with kubectl explain
+
+You will not remember where `securityContext` or `envFrom` goes. You do not need to:
+
+```bash
+k explain pod.spec                         # fields of a Pod spec
+k explain pod.spec.containers.env          # dig down with dots
+k explain deployment.spec.template.spec.containers.livenessProbe
+k explain pod.spec --recursive | less      # the whole tree; search with /
+```
+
+<Terminal
+  command="k explain pod.spec.containers.env.valueFrom"
+  output={`KIND:       Pod
+VERSION:    v1
+
+FIELD: valueFrom <EnvVarSource>
+
+DESCRIPTION:
+    Source for the environment variable's value. Cannot be used if value is not
+    empty.
+
+FIELDS:
+  configMapKeyRef	<ConfigMapKeySelector>
+  fieldRef	<ObjectFieldSelector>
+  resourceFieldRef	<ResourceFieldSelector>
+  secretKeyRef	<SecretKeySelector>`}
+/>
+
+## Read exactly one value: jsonpath
+
+`-o yaml` shows everything; `-o jsonpath` extracts one field — ideal for checks and for answers:
+
+```bash
+k get pod web -o jsonpath='{.spec.containers[0].image}'
+k get pods -o jsonpath='{.items[*].metadata.name}'
+k get pod web -o jsonpath='{.status.podIP}{"\n"}'
+```
+
+## Validate without creating
+
+```bash
+k apply -f web.yaml --dry-run=server     # the API server validates (and admission runs), nothing is stored
+k diff -f web.yaml                       # what would change on apply
+```
+
+<Callout type="exam" title="Exam tip">
+Save every manifest you write in the directory the task names (or in your home), named after the task. If something goes wrong you edit and re-apply instead of starting from scratch — and some tasks ask you to leave the file in a given path, which is then checked.
+</Callout>
+
+<Phase step="example" />
+
+## Practical example: a field without a flag
+
+Task: a Pod `env-demo` (image `busybox:1.36`, command `sleep 3600`) with an environment variable `MODE=debug`. `kubectl run --env` exists, but say it did not — the workflow is the same for any missing field:
+
+```bash
+k run env-demo --image=busybox:1.36 $do -- sleep 3600 > env-demo.yaml
+k explain pod.spec.containers.env            # name + value
+vim env-demo.yaml
+```
+
+```yaml
+spec:
+  containers:
+  - args:
+    - sleep
+    - "3600"
+    image: busybox:1.36
+    name: env-demo
+    env:                    # added
+    - name: MODE
+      value: debug
+```
+
+```bash
+k apply -f env-demo.yaml
+k exec env-demo -- printenv MODE           # debug
+```
+
+Note that `kubectl run … -- sleep 3600` puts `sleep 3600` in **args**, not `command`: the image's entrypoint receives them. For busybox that works because it has no entrypoint; use `--command -- sleep 3600` to set `command` explicitly.
+
+<Phase step="guided" />
+
+## Guided exercise
+
+<Exercise kind="guided" title="Generate, edit, apply">
+
+1. Generate a Deployment `shop` (image `nginx:1.27`, 2 replicas) into `shop.yaml`.
+2. Use `k explain` to find where the container port goes, and add `containerPort: 80`.
+3. Apply it, then print the number of ready replicas with jsonpath.
+
+<Solution>
+
+```bash
+k create deployment shop --image=nginx:1.27 --replicas=2 $do > shop.yaml
+k explain deployment.spec.template.spec.containers.ports
+# add under the container:   ports: [ { containerPort: 80 } ]
+k apply -f shop.yaml
+k get deploy shop -o jsonpath='{.status.readyReplicas}{"\n"}'     # 2
+```
+
+(`k create deployment` also has a `--port` flag — but now you know how to find any field.)
+
+</Solution>
+</Exercise>
+
+<Phase step="challenge" />
+
+## Independent challenge
+
+<Exercise kind="challenge" title="Change what cannot be changed">
+
+Pod `env-demo` exists. You are asked to add a second variable `LEVEL=3`. `k apply` refuses: *"Pod updates may not change fields other than spec.containers[*].image…"*. Make the change in one command.
+
+<Solution>
+
+```bash
+vim env-demo.yaml                       # add - name: LEVEL / value: "3"
+k replace --force -f env-demo.yaml      # deletes and recreates the Pod
+```
+
+Quote `"3"`: env values are strings, and an unquoted `3` is a number — the API rejects it.
+
+</Solution>
+</Exercise>
+
+<Phase step="troubleshooting" />
+
+## Troubleshooting
+
+<Exercise kind="troubleshooting" title="error converting YAML to JSON">
+
+`k apply -f app.yaml` fails with `error converting YAML to JSON: yaml: line 9: did not find expected key`. Line 9 is `  - name: MODE`. What do you look for?
+
+<Solution>
+
+An indentation problem on or just before line 9: typically `env:` indented differently from its siblings (`image:`, `name:`), or the list item not indented under `env:`. Check with `cat -A app.yaml | sed -n 5,10p` — tabs show up as `^I`. Fix the indentation so `env:` lines up with `image:` and `- name:` sits under it.
+
+</Solution>
+</Exercise>
+
+<Callout type="mistakes">
+
+- Writing whole manifests from memory instead of generating them.
+- Unquoted numbers as env values or annotations (`"3600"`, `"true"`).
+- `kubectl apply` on a changed Pod spec, instead of `replace --force`.
+- Forgetting the `-n` namespace in the generated YAML — add `-n ns` to the generator, or `metadata.namespace`.
+
+</Callout>
+
+<Phase step="check" />
+
+## Knowledge check
+
+<KnowledgeCheck
+  question="What does kubectl create deployment web --image=nginx --dry-run=client -o yaml do?"
+  options={['Creates the Deployment and prints it', 'Prints the YAML of the Deployment without contacting the cluster to create it', 'Validates the Deployment on the API server', 'Creates the Deployment with zero replicas']}
+  answer={1}
+  explanation="Client dry-run only builds the object in kubectl and prints it. --dry-run=server sends it to the API server for validation and admission, without storing it."
+/>
+
+<KnowledgeCheck
+  question="You cannot remember where the field for a container's working directory goes. The fastest reliable way to find it?"
+  options={['Search the internet', 'kubectl explain pod.spec.containers (look for workingDir)', 'kubectl describe pod', 'kubectl api-resources']}
+  answer={1}
+  explanation="kubectl explain reads the schema of your cluster's own API version, so it is always correct and needs no browser."
+/>
+
+## Clean up
+
+```bash
+kubectl delete deploy shop --ignore-not-found
+kubectl delete pod env-demo web --ignore-not-found --wait=false
+```

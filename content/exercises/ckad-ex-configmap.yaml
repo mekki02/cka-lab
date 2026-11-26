@@ -1,0 +1,114 @@
+id: ckad-ex-configmap
+title: "Configure the shop without rebuilding it"
+module: ckad-configuration
+lesson: ckad-configmaps
+kind: exercise
+difficulty: beginner
+minutes: 12
+order: 1
+tags: [configmaps, envFrom, volumes]
+namespaces: [ex-config]
+files:
+  - path: banner.txt
+    content: |
+      Welcome to the CKAD shop!
+      Free shipping on orders over 50 EUR.
+statement: |
+  In namespace `ex-config`:
+
+  1. Create a ConfigMap `shop-config` with `LOG_LEVEL=debug` and `CURRENCY=EUR`.
+  2. Create a ConfigMap `shop-banner` from the file `~/ckad-ex-configmap/banner.txt` (the key must be
+     `banner.txt`).
+  3. Create a Pod `shop` (`busybox:1.36`, command `sleep 3600`) that receives **every key** of
+     `shop-config` as environment variables, and sees the banner as the file `/etc/shop/banner.txt`.
+checks:
+  - id: config-data
+    description: shop-config holds LOG_LEVEL=debug and CURRENCY=EUR
+    type: cluster
+    command: kubectl -n ex-config get cm shop-config -o jsonpath='{.data.LOG_LEVEL} {.data.CURRENCY}'
+    expect: debug EUR
+    match: exact
+  - id: banner-data
+    description: shop-banner has the key banner.txt with the file's content
+    type: cluster
+    command: kubectl -n ex-config get cm shop-banner -o jsonpath='{.data.banner\.txt}'
+    expect: Free shipping on orders over 50 EUR.
+    match: contains
+  - id: env-from
+    description: shop gets the keys through envFrom
+    type: cluster
+    command: kubectl -n ex-config get pod shop -o jsonpath='{.spec.containers[0].envFrom[*].configMapRef.name}'
+    expect: shop-config
+    match: exact
+  - id: env-values
+    description: Inside shop, LOG_LEVEL and CURRENCY are set
+    type: cluster
+    command: kubectl -n ex-config exec shop -- sh -c 'echo $LOG_LEVEL $CURRENCY'
+    expect: debug EUR
+    match: exact
+  - id: banner-file
+    description: /etc/shop/banner.txt shows the banner
+    type: cluster
+    command: kubectl -n ex-config exec shop -- cat /etc/shop/banner.txt
+    expect: Welcome to the CKAD shop!
+    match: contains
+hints:
+  - "`k -n ex-config create cm shop-config --from-literal=LOG_LEVEL=debug --from-literal=CURRENCY=EUR`"
+  - "`k -n ex-config create cm shop-banner --from-file=$HOME/ckad-ex-configmap/banner.txt` — the key is the file name."
+  - "In the Pod: `envFrom: [{configMapRef: {name: shop-config}}]`, a volume `configMap: {name: shop-banner}` and a volumeMount at `/etc/shop`."
+solution: |
+  ```bash
+  k -n ex-config create cm shop-config --from-literal=LOG_LEVEL=debug --from-literal=CURRENCY=EUR
+  k -n ex-config create cm shop-banner --from-file=$HOME/ckad-ex-configmap/banner.txt
+  k -n ex-config run shop --image=busybox:1.36 $do -- sleep 3600 > shop.yaml
+  ```
+
+  ```yaml
+  spec:
+    containers:
+    - name: shop
+      image: busybox:1.36
+      args: ["sleep", "3600"]
+      envFrom:
+      - configMapRef:
+          name: shop-config
+      volumeMounts:
+      - name: banner
+        mountPath: /etc/shop
+    volumes:
+    - name: banner
+      configMap:
+        name: shop-banner
+  ```
+
+  ```bash
+  k apply -f shop.yaml
+  k -n ex-config exec shop -- sh -c 'env | grep -E "LOG_LEVEL|CURRENCY"; cat /etc/shop/banner.txt'
+  ```
+autotest:
+  solve: |
+    kubectl -n ex-config create cm shop-config --from-literal=LOG_LEVEL=debug --from-literal=CURRENCY=EUR
+    kubectl -n ex-config create cm shop-banner --from-file=$HOME/ckad-ex-configmap/banner.txt
+    cat <<'YAML' | kubectl apply -f -
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: shop
+      namespace: ex-config
+    spec:
+      containers:
+      - name: shop
+        image: busybox:1.36
+        args: ["sleep", "3600"]
+        envFrom:
+        - configMapRef:
+            name: shop-config
+        volumeMounts:
+        - name: banner
+          mountPath: /etc/shop
+      volumes:
+      - name: banner
+        configMap:
+          name: shop-banner
+    YAML
+    kubectl -n ex-config wait --for=condition=Ready pod/shop --timeout=120s

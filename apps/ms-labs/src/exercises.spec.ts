@@ -60,8 +60,8 @@ describe('exercise scripts', () => {
   it('recreates owned namespaces before the setup, and clears other exercises', () => {
     const s = exerciseClusterScript(ex, ['ex-other', 'ex-a']);
     expect(s).toContain(`grep -Fx -e 'ex-other'`); // other exercises: removed without waiting
-    expect(s).toMatch(/kubectl delete namespace \$others --wait=false/);
-    expect(s).toMatch(/kubectl delete namespace \$own --wait=true/);
+    expect(s).toMatch(/kubectl delete namespace \$others --ignore-not-found --wait=false/);
+    expect(s).toMatch(/kubectl delete namespace \$own --ignore-not-found --wait=true/);
     expect(s.indexOf('kubectl delete namespace')).toBeLessThan(s.indexOf('kubectl create namespace'));
     expect(s.indexOf('kubectl create namespace')).toBeLessThan(s.indexOf('create deploy web'));
     expect(s).toContain('ex-reader');

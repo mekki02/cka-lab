@@ -1,5 +1,5 @@
 import { Injectable, Logger, NotFoundException, type OnModuleInit } from '@nestjs/common';
-import type { CheatsheetDto, Curriculum, CurriculumLesson, CurriculumModule, ExamDomainId, ExerciseSummaryDto } from '@cka/contracts';
+import type { CheatsheetDto, Course, Curriculum, CurriculumLesson, CurriculumModule, ExamDomainId, ExerciseSummaryDto } from '@cka/contracts';
 import { Env } from '../config/env';
 import { loadContent, type ContentBundle } from './loader';
 import type { Exam, Exercise, Lab, Quiz } from './schemas';
@@ -34,7 +34,7 @@ export class ContentService implements OnModuleInit {
     const published = [...this.lessons.values()].filter(l => l.status === 'published').length;
     this.logger.log(
       `Loaded content ${this.curriculumDto.version} (Kubernetes ${this.curriculumDto.kubernetesVersion}): ` +
-        `${this.modules.size} modules, ${published}/${this.lessons.size} lessons published, ` +
+        `${this.curriculumDto.courses.length} courses, ${this.modules.size} modules, ${published}/${this.lessons.size} lessons published, ` +
         `${this.bundle.labs.size} labs, ${this.bundle.exercises.size} exercises, ${this.bundle.quizzes.size} quizzes, ${this.bundle.exams.size} exams`,
     );
   }
@@ -45,7 +45,7 @@ export class ContentService implements OnModuleInit {
    */
   private orderExercises(): Exercise[] {
     const pos = new Map<string, number>();
-    this.bundle.curriculum.modules.forEach((m, mi) => {
+    this.bundle.courses.flatMap(c => c.modules).forEach((m, mi) => {
       pos.set(m.id, mi * 1000 + 999);
       m.lessons.forEach((l, li) => pos.set(l.id, mi * 1000 + li));
     });
@@ -67,45 +67,56 @@ export class ContentService implements OnModuleInit {
   }
 
   private buildCurriculum(): Curriculum {
-    const c = this.bundle.curriculum;
+    const { catalog, courses } = this.bundle;
     const labs = [...this.bundle.labs.values()];
     const quizzes = [...this.bundle.quizzes.values()];
     return {
-      version: c.version,
-      kubernetesVersion: c.kubernetesVersion,
-      source: c.source,
-      domains: c.domains,
-      modules: c.modules.map(m => {
-        const moduleLabs = labs.filter(l => l.module === m.id);
-        const moduleExercises = this.orderedExercisesList.filter(e => e.module === m.id);
-        const lessons: CurriculumLesson[] = m.lessons.map((l, i) => ({
-          id: l.id,
-          moduleId: m.id,
-          title: l.title,
-          summary: l.summary,
-          minutes: l.minutes,
-          status: l.status,
-          prerequisites: l.prerequisites ?? (i > 0 ? [m.lessons[i - 1]!.id] : []),
-        }));
-        return {
-          id: m.id,
-          domain: m.domain,
-          title: m.title,
-          summary: m.summary,
-          objectives: m.objectives,
-          competencies: m.competencies,
-          lessons,
-          labs: moduleLabs.map(l => ({ id: l.id, title: l.title, type: l.type, difficulty: l.difficulty, minutes: l.minutes })),
-          quizzes: quizzes
-            .filter(q => q.module === m.id)
-            .map(q => ({ id: q.id, title: q.title, questions: q.questions.length })),
-          exercises: moduleExercises.map(ContentService.exerciseSummary),
-          minutes:
-            lessons.reduce((s, l) => s + l.minutes, 0) +
-            moduleLabs.reduce((s, l) => s + l.minutes, 0) +
-            moduleExercises.reduce((s, e) => s + e.minutes, 0),
-        };
-      }),
+      version: catalog.version,
+      kubernetesVersion: catalog.kubernetesVersion,
+      courses: courses.map(c => ({
+        id: c.id,
+        code: c.code,
+        title: c.title,
+        summary: c.summary,
+        audience: c.audience,
+        source: c.source,
+        moduleIds: c.modules.map(m => m.id),
+      })),
+      domains: courses.flatMap(c => c.domains.map(d => ({ ...d, courseId: c.id }))),
+      modules: courses.flatMap(c =>
+        c.modules.map(m => {
+          const moduleLabs = labs.filter(l => l.module === m.id);
+          const moduleExercises = this.orderedExercisesList.filter(e => e.module === m.id);
+          const lessons: CurriculumLesson[] = m.lessons.map((l, i) => ({
+            id: l.id,
+            moduleId: m.id,
+            title: l.title,
+            summary: l.summary,
+            minutes: l.minutes,
+            status: l.status,
+            prerequisites: l.prerequisites ?? (i > 0 ? [m.lessons[i - 1]!.id] : []),
+          }));
+          return {
+            id: m.id,
+            courseId: c.id,
+            domain: m.domain,
+            title: m.title,
+            summary: m.summary,
+            objectives: m.objectives,
+            competencies: m.competencies,
+            lessons,
+            labs: moduleLabs.map(l => ({ id: l.id, title: l.title, type: l.type, difficulty: l.difficulty, minutes: l.minutes })),
+            quizzes: quizzes
+              .filter(q => q.module === m.id)
+              .map(q => ({ id: q.id, title: q.title, questions: q.questions.length })),
+            exercises: moduleExercises.map(ContentService.exerciseSummary),
+            minutes:
+              lessons.reduce((s, l) => s + l.minutes, 0) +
+              moduleLabs.reduce((s, l) => s + l.minutes, 0) +
+              moduleExercises.reduce((s, e) => s + e.minutes, 0),
+          };
+        }),
+      ),
     };
   }
 
@@ -130,6 +141,15 @@ export class ContentService implements OnModuleInit {
 
   domainOfModule(moduleId: string): ExamDomainId | undefined {
     return this.modules.get(moduleId)?.domain;
+  }
+
+  get courses(): Course[] {
+    return this.curriculumDto.courses;
+  }
+
+  /** The modules of one course, in learning order. */
+  modulesOf(courseId: string): CurriculumModule[] {
+    return this.curriculumDto.modules.filter(m => m.courseId === courseId);
   }
 
   get labs(): Lab[] {

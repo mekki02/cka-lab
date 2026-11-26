@@ -1,0 +1,98 @@
+id: ckad-ex-manifests
+title: "Fix a manifest, generate another"
+module: ckad-first-steps
+lesson: ckad-manifests-kubectl
+kind: exercise
+difficulty: beginner
+minutes: 12
+order: 1
+tags: [yaml, dry-run, explain]
+namespaces: [ex-yaml-dev]
+files:
+  - path: web.yaml
+    content: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: web
+        namespace: ex-yaml-dev
+        labels:
+          app: web
+      spec:
+        containers:
+        - name: web
+          image: nginx:1.27
+          ports:
+          - containerPort: 80
+         env:
+          - name: MODE
+            value: prod
+          - name: WORKERS
+            value: 4
+statement: |
+  Your colleague left `~/ckad-ex-manifests/web.yaml`, which does not apply. In namespace `ex-yaml-dev`:
+
+  1. Fix the file so that it applies, and apply it: Pod `web` must run with the environment variables
+     `MODE=prod` and `WORKERS=4`. (Try `k apply -f` first and read the errors — there are **two** problems.)
+  2. Create a Deployment `api` with **2** replicas of `nginx:1.27` **from a generated manifest**: generate it
+     with `--dry-run=client -o yaml` (or `$do`) into `~/ckad-ex-manifests/api.yaml`, then apply that file.
+     The file must stay there.
+checks:
+  - id: web-env
+    description: Pod web runs with MODE=prod and WORKERS=4
+    type: cluster
+    command: kubectl -n ex-yaml-dev get pod web -o jsonpath='{range .spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}'
+    expect: |
+      MODE=prod
+      WORKERS=4
+    match: lines
+  - id: web-running
+    description: Pod web is Running
+    type: cluster
+    command: kubectl -n ex-yaml-dev get pod web -o jsonpath='{.status.phase}'
+    expect: Running
+    match: exact
+  - id: api-file
+    description: ~/ckad-ex-manifests/api.yaml is a Deployment manifest named api
+    type: file
+    path: ckad-ex-manifests/api.yaml
+    expect: 'kind: Deployment[\s\S]*name: api'
+    match: regex
+  - id: api-deploy
+    description: Deployment api runs 2 replicas of nginx:1.27
+    type: cluster
+    command: kubectl -n ex-yaml-dev get deploy api -o jsonpath='{.spec.replicas} {.spec.template.spec.containers[0].image}'
+    expect: 2 nginx:1.27
+    match: exact
+  - id: generated
+    description: You generated YAML with a client dry-run
+    type: history
+    expect: '--dry-run=client|\$do\b'
+hints:
+  - "`env:` must line up with `image:` and `ports:` — it is a field of the container."
+  - "Environment values are strings: `value: \"4\"`. Unquoted, YAML reads 4 as a number and the API rejects it."
+  - "`k -n ex-yaml-dev create deployment api --image=nginx:1.27 --replicas=2 $do > ~/ckad-ex-manifests/api.yaml`"
+solution: |
+  ```yaml
+      ports:
+      - containerPort: 80
+      env:                 # same indentation as ports:
+      - name: MODE
+        value: prod
+      - name: WORKERS
+        value: "4"         # quoted
+  ```
+
+  ```bash
+  k apply -f ~/ckad-ex-manifests/web.yaml
+  k -n ex-yaml-dev create deployment api --image=nginx:1.27 --replicas=2 $do > ~/ckad-ex-manifests/api.yaml
+  k apply -f ~/ckad-ex-manifests/api.yaml
+  ```
+autotest:
+  solve: |
+    cd ~/ckad-ex-manifests
+    sed -i 's/^   env:/    env:/; s/value: 4$/value: "4"/' web.yaml
+    kubectl apply -f web.yaml
+    kubectl -n ex-yaml-dev create deployment api --image=nginx:1.27 --replicas=2 --dry-run=client -o yaml > api.yaml
+    kubectl apply -f api.yaml
+    kubectl -n ex-yaml-dev wait --for=condition=Ready pod/web --timeout=120s

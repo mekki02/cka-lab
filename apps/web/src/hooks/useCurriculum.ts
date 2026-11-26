@@ -1,27 +1,45 @@
 import { useMemo } from 'react';
-import type { Curriculum, CurriculumLesson, CurriculumModule, ExamDomain } from '@cka/contracts';
+import type { Course, Curriculum, CurriculumLesson, CurriculumModule, ExamDomain } from '@cka/contracts';
 import { useCurriculumQuery, useProgressQuery } from '@/api/api';
 
 export interface CurriculumIndex {
   curriculum: Curriculum;
+  courses: Map<string, Course>;
   modules: Map<string, CurriculumModule>;
   lessons: Map<string, CurriculumLesson>;
   domains: Map<string, ExamDomain>;
-  /** All lessons in course order. */
+  /** All lessons, course by course, in learning order. */
   ordered: CurriculumLesson[];
-  /** Published lessons in course order (what prev/next walks through). */
+  /** Published lessons in learning order. Walk them per course with `courseOfLesson`. */
   published: CurriculumLesson[];
+  modulesOf: (courseId: string) => CurriculumModule[];
+  courseOfModule: (moduleId: string) => Course | undefined;
+  courseOfLesson: (lessonId: string) => Course | undefined;
 }
 
 const build = (c: Curriculum): CurriculumIndex => {
   const ordered = c.modules.flatMap(m => m.lessons);
+  const courses = new Map(c.courses.map(x => [x.id, x]));
+  const modules = new Map(c.modules.map(m => [m.id, m]));
+  const lessons = new Map(ordered.map(l => [l.id, l]));
+  const courseOfModule = (id: string) => {
+    const m = modules.get(id);
+    return m ? courses.get(m.courseId) : undefined;
+  };
   return {
     curriculum: c,
-    modules: new Map(c.modules.map(m => [m.id, m])),
-    lessons: new Map(ordered.map(l => [l.id, l])),
+    courses,
+    modules,
+    lessons,
     domains: new Map(c.domains.map(d => [d.id, d])),
     ordered,
     published: ordered.filter(l => l.status === 'published'),
+    modulesOf: id => c.modules.filter(m => m.courseId === id),
+    courseOfModule,
+    courseOfLesson: id => {
+      const l = lessons.get(id);
+      return l ? courseOfModule(l.moduleId) : undefined;
+    },
   };
 };
 

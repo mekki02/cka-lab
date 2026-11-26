@@ -92,7 +92,7 @@ const SearchDialog = ({ onClose }: { onClose: () => void }) => {
           id: `lesson:${l.id}`,
           kind: 'lesson' as const,
           title: l.title,
-          subtitle: index.modules.get(l.moduleId)?.title ?? '',
+          subtitle: `${index.courseOfModule(l.moduleId)?.code ?? ''} · ${index.modules.get(l.moduleId)?.title ?? ''}`,
           to: `/learn/${l.moduleId}/${l.id}`,
           body: `${l.summary} ${text.get(l.id)?.headings ?? ''} ${text.get(l.id)?.text ?? ''}`,
         })),

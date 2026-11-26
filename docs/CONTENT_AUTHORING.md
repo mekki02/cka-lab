@@ -4,7 +4,8 @@ All course content is plain files under `content/`, reviewed like code. Adding a
 
 ```
 content/
-  curriculum.yaml                       domains, competencies, modules, lessons (order + status)
+  curriculum.yaml                       the catalogue: Kubernetes version + course ids, in display order
+  courses/<course-id>.yaml              one course (CKAD, CKA): domains, competencies, modules, lessons
   lessons/<module-id>/<lesson-id>.mdx   lesson bodies (compiled into the web image)
   labs/<lab-id>.yaml                    hands-on labs
   quizzes/<quiz-id>.yaml                module quizzes (graded server-side)
@@ -19,13 +20,17 @@ npm run content:check     # schemas, references, competency coverage, lesson bod
 npm run build -w @cka/web # compiles every MDX lesson — catches MDX syntax errors
 ```
 
-## The curriculum
+## Courses and the curriculum
 
-`curriculum.yaml` is the outline. Rules enforced by the checker:
+The platform hosts several certification tracks. `curriculum.yaml` only lists them (`courses: [ckad, cka]`, in the order the web app shows them); each course is `courses/<id>.yaml` with its `id`, exam `code`, `title`, `summary`, `audience` (who should start here), the official `source` URL, its `domains` and its `modules`. Rules enforced by the checker, per course:
 
-- The five exam domains must exist with their official **weights (sum 100)** and **competencies, quoted verbatim** from the CNCF curriculum. Extra tracks (like `platform-tools`) have weight 0.
-- Every official competency must be covered by at least one module (`modules[].competencies`).
-- Ids are kebab-case and unique; lesson ids are global.
+- Exam domains (weight > 0) carry their official **weights (sum 100)** and **competencies, quoted verbatim** from the CNCF curriculum. Extra tracks (like CKA's `platform-tools`) have weight 0.
+- Every official competency must be covered by at least one module of the course (`modules[].competencies`).
+- A module's `domain` must be a domain of the same course. A mock exam names its `course`, and its tasks use that course's domains.
+- Ids are kebab-case and unique **across all courses** — modules, lessons, domains and competencies. Routes (`/learn/<module>/<lesson>`), lesson progress and exercises refer to them without naming the course. CKAD ids are prefixed `ckad-` wherever a CKA id could collide.
+- Every file in `courses/` must be listed in `curriculum.yaml`, and every listed course must have a file.
+
+Adding a course: create `courses/<id>.yaml`, add the id to `curriculum.yaml`, add `COPY` lines only if you add a new top-level content directory (the Dockerfiles already copy `courses/`). The web app picks it up — the course switcher appears on the dashboard, course, exercises, labs, quizzes and mock exam pages.
 - `status: published` lessons must have a body; `planned` ones show as "coming soon".
 - `prerequisites` default to the previous lesson in the module; list ids explicitly to override.
 
@@ -33,7 +38,7 @@ When the CNCF updates the exam: update `kubernetesVersion`, the domain weights a
 
 ### Adding a lesson
 
-1. Add it to its module in `curriculum.yaml` (`status: planned` until written).
+1. Add it to its module in `courses/<course>.yaml` (`status: planned` until written).
 2. Create `content/lessons/<module-id>/<lesson-id>.mdx` starting with:
 
    ```mdx
@@ -165,7 +170,7 @@ Full solution with commands and explanation.
 ```yaml
 id: services-broken-shop
 title: "The shop is down: debugging Services"
-module: services                 # must exist in curriculum.yaml
+module: services                 # must exist in a courses/*.yaml
 type: troubleshooting            # guided | challenge | troubleshooting
 difficulty: intermediate         # beginner | intermediate | advanced
 minutes: 40

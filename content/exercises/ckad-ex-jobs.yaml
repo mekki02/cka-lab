@@ -1,0 +1,83 @@
+id: ckad-ex-jobs
+title: "A parallel batch Job"
+module: ckad-workloads
+lesson: ckad-jobs-cronjobs
+kind: exercise
+difficulty: beginner
+minutes: 10
+order: 1
+tags: [jobs, completions, parallelism]
+namespaces: [ex-batch]
+statement: |
+  In namespace `ex-batch`, create a Job `thumbnails` that:
+
+  - runs image `busybox:1.36` with the command `sh -c 'echo resizing; sleep 2'`;
+  - needs **4** successful completions, running **2** Pods at a time;
+  - gives up after **1** retry;
+  - must finish within **120** seconds overall.
+
+  Wait until it is complete, then answer: what label does the Job controller put on its Pods so you can
+  find them? (`key=value`)
+inputs:
+  - id: label
+    label: Label of the thumbnails Pods (key=value)
+    placeholder: key=value
+checks:
+  - id: spec
+    description: "completions 4, parallelism 2, backoffLimit 1, activeDeadlineSeconds 120"
+    type: cluster
+    command: kubectl -n ex-batch get job thumbnails -o jsonpath='{.spec.completions} {.spec.parallelism} {.spec.backoffLimit} {.spec.activeDeadlineSeconds}'
+    expect: 4 2 1 120
+    match: exact
+  - id: command
+    description: Its container runs the resize command with busybox:1.36
+    type: cluster
+    command: kubectl -n ex-batch get job thumbnails -o jsonpath='{.spec.template.spec.containers[0].image} {.spec.template.spec.containers[0].command} {.spec.template.spec.containers[0].args}'
+    expect: 'busybox:1\.36 .*echo resizing; sleep 2'
+    match: regex
+  - id: complete
+    description: The Job completed with 4 successful Pods
+    type: cluster
+    command: kubectl -n ex-batch get job thumbnails -o jsonpath='{.status.succeeded}'
+    expect: "4"
+    match: number
+  - id: label
+    description: You know how to find a Job's Pods
+    type: answer
+    input: label
+    expect: '^\s*(batch\.kubernetes\.io/)?job-name\s*=\s*thumbnails\s*$'
+    match: regex
+hints:
+  - "`k -n ex-batch create job thumbnails --image=busybox:1.36 $do -- sh -c 'echo resizing; sleep 2' > job.yaml`"
+  - "`k explain job.spec` lists `completions`, `parallelism`, `backoffLimit` and `activeDeadlineSeconds`; they go directly under the Job's `spec:`."
+  - "`k -n ex-batch get pods --show-labels`"
+solution: |
+  ```bash
+  k -n ex-batch create job thumbnails --image=busybox:1.36 $do -- sh -c 'echo resizing; sleep 2' > job.yaml
+  vim job.yaml
+  ```
+
+  ```yaml
+  spec:
+    completions: 4
+    parallelism: 2
+    backoffLimit: 1
+    activeDeadlineSeconds: 120
+    template: …
+  ```
+
+  ```bash
+  k apply -f job.yaml
+  k -n ex-batch wait --for=condition=complete job/thumbnails --timeout=120s
+  k -n ex-batch get pods -l job-name=thumbnails
+  ```
+
+  Job Pods carry `job-name=<job>` (and `batch.kubernetes.io/job-name`, plus a `controller-uid`).
+autotest:
+  solve: |
+    kubectl -n ex-batch create job thumbnails --image=busybox:1.36 --dry-run=client -o yaml -- sh -c 'echo resizing; sleep 2' > /tmp/job.yaml
+    yq -i '.spec.completions = 4 | .spec.parallelism = 2 | .spec.backoffLimit = 1 | .spec.activeDeadlineSeconds = 120' /tmp/job.yaml
+    kubectl apply -f /tmp/job.yaml
+    kubectl -n ex-batch wait --for=condition=complete job/thumbnails --timeout=150s
+  answers:
+    label: job-name=thumbnails

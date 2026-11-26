@@ -1,0 +1,231 @@
+---
+id: ckad-workload-types
+---
+
+You will rarely create Pods directly. You create a **workload resource**, and its controller creates and replaces the Pods for you. Kubernetes has a handful of them, and each makes a different promise. The exam often hides the choice in the wording — "one per node", "stable identity", "runs to completion" — so this lesson is about recognising which controller a task asks for.
+
+<Phase step="theory" />
+
+## The workload controllers
+
+| Resource | Promise | Typical use |
+|---|---|---|
+| **Deployment** | N interchangeable Pods; rolling updates and rollbacks | stateless web apps and APIs — the default |
+| **ReplicaSet** | N identical Pods (no update logic) | managed by Deployments; never create one yourself |
+| **StatefulSet** | N Pods with **stable names** (`db-0`, `db-1`), ordered start/stop, a volume per Pod | databases, queues, anything clustered |
+| **DaemonSet** | **One Pod per node** (or per matching node) | log collectors, monitoring agents, network plugins |
+| **Job** | Pods that **run to completion**, retried on failure | migrations, batch processing, one-off tasks |
+| **CronJob** | Creates a Job **on a schedule** | backups, reports, cleanup |
+
+All of them share the same building block: a **Pod template** (`spec.template`) — a Pod spec without a name. Everything you learn about Pods (containers, env, volumes, probes) goes inside that template.
+
+## Deployment vs StatefulSet
+
+A Deployment's Pods are cattle: random suffixes (`web-7c9f8d6b5-x2x9q`), started in parallel, sharing whatever volume you give the template. A StatefulSet's Pods are named pets:
+
+- names are `<name>-0`, `<name>-1`, … and survive rescheduling;
+- they start in order (0, then 1…) and stop in reverse;
+- `volumeClaimTemplates` give each Pod **its own** PersistentVolumeClaim, kept when the Pod moves;
+- a **headless Service** (`serviceName`) gives each Pod a DNS name: `db-0.db.shop.svc.cluster.local`.
+
+## DaemonSet
+
+There is no `replicas` field: the number of Pods is the number of eligible nodes. Add a node and a Pod appears on it; remove the node and its Pod goes. Use `nodeSelector` or tolerations to target a subset (for example only nodes with a GPU, or including control plane nodes).
+
+<Phase step="visualization" />
+
+## Which one?
+
+<Diagram
+  caption="Ask the questions in order; the first yes picks the controller."
+  chart={`flowchart TD
+    Q1{"Does it finish?"} -- "yes, once" --> J["Job"]
+    Q1 -- "yes, on a schedule" --> CJ["CronJob"]
+    Q1 -- "no, runs forever" --> Q2{"One per node?"}
+    Q2 -- yes --> DS["DaemonSet"]
+    Q2 -- no --> Q3{"Needs stable identity or its own volume per Pod?"}
+    Q3 -- yes --> SS["StatefulSet"]
+    Q3 -- no --> D["Deployment"]`}
+/>
+
+<Phase step="command-line" />
+
+## Create them
+
+Deployments, Jobs and CronJobs have generators. DaemonSets and StatefulSets do not — **generate a Deployment and change it**:
+
+```bash
+k create deployment web --image=nginx:1.27 --replicas=3
+k create job once --image=busybox:1.36 -- echo hi
+k create cronjob nightly --image=busybox:1.36 --schedule='0 2 * * *' -- date
+
+# DaemonSet: start from a Deployment
+k create deployment agent --image=busybox:1.36 $do -- sleep infinity > agent.yaml
+```
+
+Then edit `agent.yaml`: change `kind: Deployment` to `kind: DaemonSet`, and delete `replicas:`, `strategy: {}` and `status: {}` (a DaemonSet has none of them).
+
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet           # was Deployment
+metadata:
+  labels:
+    app: agent
+  name: agent
+spec:                     # no replicas, no strategy
+  selector:
+    matchLabels:
+      app: agent
+  template:
+    metadata:
+      labels:
+        app: agent
+    spec:
+      containers:
+      - image: busybox:1.36
+        name: busybox
+        command: ["sleep", "infinity"]
+```
+
+## Inspect them
+
+```bash
+k get deploy,ds,sts,job,cronjob          # short names: deploy, ds, sts, cj
+k get ds agent                           # DESIRED / CURRENT / READY = number of nodes
+k get pods -o wide -l app=agent          # one per node
+k rollout status ds/agent                # rollouts work for DaemonSets and StatefulSets too
+```
+
+<Terminal
+  command="k get ds agent"
+  output={`NAME    DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR   AGE
+agent   2         2         2       2            2           <none>          40s`}
+/>
+
+## A StatefulSet, minimally
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: db
+spec:
+  serviceName: db          # a headless Service with this name gives Pods DNS names
+  replicas: 2
+  selector:
+    matchLabels: { app: db }
+  template:
+    metadata:
+      labels: { app: db }
+    spec:
+      containers:
+      - name: db
+        image: busybox:1.36
+        command: ["sleep", "infinity"]
+```
+
+<Callout type="note">
+In this playground there is a single node, so a DaemonSet runs exactly one Pod. On the exam clusters you will see one Pod per worker — and none on the control plane, which is tainted, unless you add a toleration.
+</Callout>
+
+<Phase step="example" />
+
+## Practical example: stable names
+
+```bash
+k apply -f db.yaml               # the StatefulSet above
+k get pods -l app=db -w          # db-0 becomes Ready, then db-1 starts
+k delete pod db-0
+k get pods -l app=db             # a NEW db-0 — same name, same identity
+k scale sts db --replicas=1      # db-1 goes first (reverse order)
+```
+
+Do the same with a Deployment and the replacement gets a new random name.
+
+<Phase step="guided" />
+
+## Guided exercise
+
+<Exercise kind="guided" title="Turn a Deployment into a DaemonSet">
+
+1. Generate the `agent` Deployment above into `agent.yaml`.
+2. Make it a DaemonSet and apply it.
+3. Check that `DESIRED` equals the number of nodes (`k get nodes`).
+
+<Solution>
+
+```bash
+k create deployment agent --image=busybox:1.36 $do -- sleep infinity > agent.yaml
+sed -i 's/kind: Deployment/kind: DaemonSet/; /replicas:/d; /strategy: {}/d; /^status: {}/d' agent.yaml
+k apply -f agent.yaml
+k get ds agent; k get nodes --no-headers | wc -l
+```
+
+If you forget to remove `replicas`, the API server rejects the manifest with `unknown field "spec.replicas"`.
+
+</Solution>
+</Exercise>
+
+<Phase step="challenge" />
+
+## Independent challenge
+
+<Exercise kind="challenge" title="Name the controller">
+
+For each requirement, name the resource: (a) a Fluent Bit agent reading logs on every machine; (b) a PostgreSQL primary and replica, each with its own disk; (c) a database schema migration run during a release; (d) the shop front end, 4 copies; (e) delete expired sessions every hour.
+
+<Solution>
+
+(a) DaemonSet · (b) StatefulSet · (c) Job · (d) Deployment · (e) CronJob.
+
+</Solution>
+</Exercise>
+
+<Phase step="troubleshooting" />
+
+## Troubleshooting
+
+<Exercise kind="troubleshooting" title="DESIRED 0">
+
+A DaemonSet shows `DESIRED 0` on a cluster with three nodes. Its template has `nodeSelector: { disk: ssd }`. What do you check?
+
+<Solution>
+
+Whether any node carries that label: `k get nodes -L disk` (or `k get nodes -l disk=ssd`). A DaemonSet only targets nodes that match its `nodeSelector`/affinity and whose taints it tolerates. Label the intended nodes (`k label node worker-1 disk=ssd`) or fix the selector.
+
+</Solution>
+</Exercise>
+
+<Callout type="mistakes">
+
+- Using a Deployment for something that must run on every node.
+- Leaving `replicas` or `strategy` in a DaemonSet manifest (StatefulSets have `replicas` but use `updateStrategy`, not `strategy`).
+- Expecting a Deployment's Pods to keep their names or their own volumes.
+
+</Callout>
+
+<Phase step="check" />
+
+## Knowledge check
+
+<KnowledgeCheck
+  question="A task asks for 'a Pod of the monitoring agent on every node, including new nodes added later'. Which resource?"
+  options={['A Deployment with replicas equal to the node count', 'A DaemonSet', 'A StatefulSet', 'A Job with parallelism equal to the node count']}
+  answer={1}
+  explanation="A DaemonSet runs one Pod per eligible node and follows nodes as they join and leave; a Deployment with a fixed replica count does not guarantee one Pod per node."
+/>
+
+<KnowledgeCheck
+  question="What does a StatefulSet give its Pods that a Deployment does not?"
+  options={['Faster rolling updates', 'Stable names and a dedicated PersistentVolumeClaim per Pod', 'Automatic horizontal scaling', 'One Pod per node']}
+  answer={1}
+  explanation="StatefulSet Pods are named <name>-<ordinal>, start and stop in order, and keep their own claims from volumeClaimTemplates."
+/>
+
+## Clean up
+
+```bash
+kubectl delete ds agent --ignore-not-found
+kubectl delete sts db --ignore-not-found
+kubectl delete deploy web --ignore-not-found
+```

@@ -96,7 +96,7 @@ Course content is version-controlled under `content/` and **compiled into the im
 
 ```
 content/
-  curriculum.yaml ──► ms-learning image (served as /api/learning/curriculum)
+  curriculum.yaml + courses/*.yaml ──► ms-learning image (served as /api/learning/curriculum: all courses, their domains and modules)
   labs/ quizzes/ exams/ cheatsheets/ ──► ms-learning image (answer keys never leave the server)
   lessons/<module>/<lesson>.mdx ──► web image (compiled to JS chunks, highlighted at build time)
 ```

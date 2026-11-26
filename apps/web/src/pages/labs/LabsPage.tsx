@@ -6,6 +6,8 @@ import type { LabType } from '@cka/contracts';
 import { useLabProgressQuery } from '@/api/api';
 import { EmptyState, ErrorState, Loading, PageHeader } from '@/components/states';
 import { useCurriculum } from '@/hooks/useCurriculum';
+import { useSelectedCourse } from '@/hooks/useSelectedCourse';
+import { CourseSwitcher } from '@/components/CourseSwitcher';
 
 export const LAB_TYPE_LABEL: Record<LabType, string> = {
   guided: 'Guided',
@@ -17,19 +19,21 @@ export const LabsPage = () => {
   const { index, error, isLoading, refetch } = useCurriculum();
   const { data: progress } = useLabProgressQuery();
   const [filter, setFilter] = useState<LabType | 'all'>('all');
+  const { course } = useSelectedCourse();
 
   if (error) return <ErrorState error={error} onRetry={refetch} />;
-  if (isLoading || !index) return <Loading />;
+  if (isLoading || !index || !course) return <Loading />;
 
   const status = new Map((progress ?? []).map(p => [p.labId, p]));
-  const labs = index.curriculum.modules.flatMap(m => m.labs.map(l => ({ ...l, module: m })));
+  const labs = index.modulesOf(course.id).flatMap(m => m.labs.map(l => ({ ...l, module: m })));
   const shown = labs.filter(l => filter === 'all' || l.type === filter);
 
   return (
     <Box sx={{ maxWidth: 1280, mx: 'auto' }}>
       <PageHeader
-        overline="Hands-on labs"
+        overline={`${course.code} hands-on labs`}
         title="Labs"
+        actions={<CourseSwitcher />}
         subtitle="Practise on your own cluster (kind works for most labs). Guided labs walk you through each step; challenge labs give only the objective; troubleshooting labs start from a broken state."
       />
       <ToggleButtonGroup exclusive size="small" value={filter} onChange={(_, v) => v && setFilter(v)} sx={{ mb: 3 }}>
@@ -39,8 +43,8 @@ export const LabsPage = () => {
         <ToggleButton value="troubleshooting">Troubleshooting</ToggleButton>
       </ToggleButtonGroup>
       {shown.length === 0 ? (
-        <EmptyState icon={<ScienceOutlinedIcon fontSize="inherit" />} title="No labs here yet">
-          Labs are added alongside their modules.
+        <EmptyState icon={<ScienceOutlinedIcon fontSize="inherit" />} title={`No ${course.code} labs here yet`}>
+          Labs are added alongside their modules. Until then, the exercises of each lesson give you hands-on practice.
         </EmptyState>
       ) : (
         <Grid container spacing={2}>

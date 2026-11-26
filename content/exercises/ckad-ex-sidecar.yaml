@@ -1,0 +1,114 @@
+id: ckad-ex-sidecar
+title: "Add a log-shipping sidecar to a Deployment"
+module: ckad-multi-container
+lesson: ckad-sidecars-patterns
+kind: exercise
+difficulty: intermediate
+minutes: 15
+order: 1
+tags: [sidecar, native-sidecar, deployments, emptyDir]
+namespaces: [ex-sidecar]
+setup: |
+  cat <<'YAML' | kubectl apply -f -
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: orders
+    namespace: ex-sidecar
+  spec:
+    replicas: 1
+    selector:
+      matchLabels: { app: orders }
+    template:
+      metadata:
+        labels: { app: orders }
+      spec:
+        terminationGracePeriodSeconds: 5
+        containers:
+        - name: app
+          image: busybox:1.36
+          command: ["sh", "-c", "i=0; while true; do i=$((i+1)); echo \"$(date +%T) order $i accepted\" >> /var/log/orders/orders.log; sleep 3; done"]
+          volumeMounts:
+          - name: logs
+            mountPath: /var/log/orders
+        volumes:
+        - name: logs
+          emptyDir: {}
+  YAML
+  kubectl -n ex-sidecar rollout status deploy orders --timeout=150s
+statement: |
+  The Deployment `orders` in namespace `ex-sidecar` writes its log to a **file**,
+  `/var/log/orders/orders.log`, so `kubectl logs` shows nothing.
+
+  Without changing the `app` container, add a **native sidecar** named `shipper` (`busybox:1.36`) to the
+  Deployment's Pods that streams that file to its own standard output with `tail -F`. When you are done,
+  `k -n ex-sidecar logs deploy/orders -c shipper` must show the orders.
+checks:
+  - id: native
+    description: shipper is a native sidecar (an init container with restartPolicy Always)
+    type: cluster
+    command: kubectl -n ex-sidecar get deploy orders -o jsonpath='{.spec.template.spec.initContainers[?(@.name=="shipper")].restartPolicy}'
+    expect: Always
+    match: exact
+  - id: mount
+    description: shipper mounts the logs volume at /var/log/orders
+    type: cluster
+    command: kubectl -n ex-sidecar get deploy orders -o jsonpath='{.spec.template.spec.initContainers[?(@.name=="shipper")].volumeMounts[?(@.name=="logs")].mountPath}'
+    expect: /var/log/orders
+    match: exact
+  - id: app-unchanged
+    description: The app container is unchanged
+    type: cluster
+    command: kubectl -n ex-sidecar get deploy orders -o jsonpath='{.spec.template.spec.containers[*].name} {.spec.template.spec.containers[0].image}'
+    expect: app busybox:1.36
+    match: exact
+  - id: rolled-out
+    description: The rollout is finished (old Pod gone) and the new Pod is ready with both containers
+    type: cluster
+    command: kubectl -n ex-sidecar get pods -l app=orders -o jsonpath='{range .items[?(@.metadata.deletionTimestamp)]}x{end}{range .items[*]}{.status.initContainerStatuses[0].ready}/{.status.containerStatuses[0].ready} {end}'
+    expect: '^true/true $'
+    match: regex
+  - id: streams
+    description: The sidecar streams the orders log
+    type: cluster
+    command: kubectl -n ex-sidecar logs deploy/orders -c shipper --tail=20
+    expect: 'order \d+ accepted'
+    match: regex
+hints:
+  - "`k -n ex-sidecar edit deploy orders` — add an `initContainers:` list under `spec.template.spec`, at the same level as `containers:`."
+  - "The sidecar needs `restartPolicy: Always`, the `logs` volume mounted at `/var/log/orders`, and `command: [\"sh\", \"-c\", \"tail -F /var/log/orders/orders.log\"]`."
+solution: |
+  ```bash
+  k -n ex-sidecar edit deploy orders
+  ```
+
+  ```yaml
+  spec:
+    template:
+      spec:
+        initContainers:
+        - name: shipper
+          image: busybox:1.36
+          restartPolicy: Always
+          command: ["sh", "-c", "tail -F /var/log/orders/orders.log"]
+          volumeMounts:
+          - name: logs
+            mountPath: /var/log/orders
+        containers:
+        - name: app
+          …
+  ```
+
+  ```bash
+  k -n ex-sidecar rollout status deploy orders
+  k -n ex-sidecar logs deploy/orders -c shipper -f
+  ```
+
+  `tail -F` (capital F) keeps retrying if the file does not exist yet — the sidecar starts **before** the app
+  container has written anything.
+autotest:
+  solve: |
+    kubectl -n ex-sidecar patch deploy orders --type=json -p='[{"op":"add","path":"/spec/template/spec/initContainers","value":[{"name":"shipper","image":"busybox:1.36","restartPolicy":"Always","command":["sh","-c","tail -F /var/log/orders/orders.log"],"volumeMounts":[{"name":"logs","mountPath":"/var/log/orders"}]}]}]'
+    kubectl -n ex-sidecar rollout status deploy orders --timeout=150s
+    until [ "$(kubectl -n ex-sidecar get pods -l app=orders --no-headers | wc -l)" = 1 ]; do sleep 2; done
+    sleep 5

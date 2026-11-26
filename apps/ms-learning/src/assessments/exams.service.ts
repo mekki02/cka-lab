@@ -20,6 +20,7 @@ export class ExamsService {
   summaries(): ExamSummaryDto[] {
     return this.content.exams.map(e => ({
       id: e.id,
+      courseId: e.course,
       title: e.title,
       description: e.description,
       durationMinutes: e.durationMinutes,

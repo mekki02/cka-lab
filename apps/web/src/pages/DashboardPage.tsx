@@ -22,7 +22,9 @@ import type { ReactNode } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import { useDashboardQuery, useMeQuery } from '@/api/api';
 import { ErrorState, Loading, PageHeader } from '@/components/states';
+import { CourseSwitcher } from '@/components/CourseSwitcher';
 import { useCurriculum, type CurriculumIndex } from '@/hooks/useCurriculum';
+import { useSelectedCourse } from '@/hooks/useSelectedCourse';
 import { timeAgo } from '@/utils/format';
 
 const StatCard = ({ label, value, hint }: { label: string; value: ReactNode; hint?: ReactNode }) => (
@@ -52,23 +54,32 @@ export const DashboardPage = () => {
   const { data: me } = useMeQuery();
   const { data, error, isLoading, refetch } = useDashboardQuery();
   const { index, error: cError } = useCurriculum();
+  const { course } = useSelectedCourse(data?.currentCourseId);
 
   if (error || cError) return <ErrorState error={error ?? cError} onRetry={refetch} />;
-  if (isLoading || !data || !index) return <Loading />;
+  if (isLoading || !data || !index || !course) return <Loading />;
 
-  const next = data.nextLessonId ? lessonLink(index, data.nextLessonId) : null;
-  const nextLesson = data.nextLessonId ? index.lessons.get(data.nextLessonId) : undefined;
-  const examDomains = data.domains.filter(d => d.weight > 0);
-  const extraDomains = data.domains.filter(d => d.weight === 0);
-  const t = data.totals;
+  const cp = data.courses.find(c => c.courseId === course.id) ?? data.courses[0]!;
+  const moduleIds = new Set(course.moduleIds);
+  const inCourse = (lessonId: string) => moduleIds.has(index.lessons.get(lessonId)?.moduleId ?? '');
+  const next = cp.nextLessonId ? lessonLink(index, cp.nextLessonId) : null;
+  const nextLesson = cp.nextLessonId ? index.lessons.get(cp.nextLessonId) : undefined;
+  const examDomains = cp.domains.filter(d => d.weight > 0);
+  const extraDomains = cp.domains.filter(d => d.weight === 0);
+  const t = cp.totals;
   const firstName = me?.displayName.split(' ')[0];
+  const labsInProgress = data.inProgressLabs.filter(id => index.curriculum.modules.some(m => moduleIds.has(m.id) && m.labs.some(l => l.id === id)));
+  const quizModules = new Map(index.curriculum.modules.flatMap(m => m.quizzes.map(q => [q.id, m.id] as const)));
+  const quizAttempts = data.recentQuizAttempts.filter(a => moduleIds.has(quizModules.get(a.quizId) ?? ''));
+  const recent = data.recent.filter(r => inCourse(r.lessonId));
 
   return (
     <Box sx={{ maxWidth: 1280, mx: 'auto' }}>
       <PageHeader
         overline="Dashboard"
         title={firstName ? `Welcome back, ${firstName}` : 'Welcome back'}
-        subtitle={`CKA curriculum aligned with Kubernetes v${index.curriculum.kubernetesVersion}. ${t.lessonsPublished} lessons available, ${t.lessonsPlanned} more planned.`}
+        subtitle={`${course.title} (${course.code}), aligned with Kubernetes v${index.curriculum.kubernetesVersion}. ${t.lessonsPublished} lessons available, ${t.lessonsPlanned} more planned.`}
+        actions={<CourseSwitcher fallback={data.currentCourseId} />}
       />
 
       <Grid container spacing={2.5}>
@@ -93,7 +104,7 @@ export const DashboardPage = () => {
                 </>
               ) : (
                 <Typography variant="h5" sx={{ mt: 1 }}>
-                  You have completed every published lesson. New lessons appear here as they are released.
+                  You have completed every published {course.code} lesson. New lessons appear here as they are released.
                 </Typography>
               )}
             </CardContent>
@@ -106,7 +117,7 @@ export const DashboardPage = () => {
             <CardContent>
               <Stack direction="row" alignItems="center" spacing={0.5}>
                 <Typography variant="overline" color="text.secondary">
-                  Study readiness
+                  {course.code} study readiness
                 </Typography>
                 <Tooltip title="Weighted by the official domain weights: half lesson completion, half best quiz scores. A study-coverage indicator — not a prediction of your exam result.">
                   <InfoOutlinedIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
@@ -114,18 +125,18 @@ export const DashboardPage = () => {
               </Stack>
               <Box sx={{ height: 150 }}>
                 <Gauge
-                  value={data.readiness}
+                  value={cp.readiness}
                   startAngle={-110}
                   endAngle={110}
                   innerRadius="75%"
                   text={({ value }) => `${value}%`}
                   sx={{ [`& .${gaugeClasses.valueText}`]: { fontSize: 28, fontWeight: 700 } }}
-                  aria-label={`Study readiness ${data.readiness} percent`}
+                  aria-label={`${course.code} study readiness ${cp.readiness} percent`}
                 />
               </Box>
-              {data.lastExam ? (
+              {cp.lastExam ? (
                 <Typography variant="body2" color="text.secondary" textAlign="center">
-                  Last mock exam: <strong>{data.lastExam.percent}%</strong> (simulated, self-assessed)
+                  Last mock exam: <strong>{cp.lastExam.percent}%</strong> (simulated, self-assessed)
                 </Typography>
               ) : (
                 <Typography variant="body2" color="text.secondary" textAlign="center">
@@ -140,7 +151,7 @@ export const DashboardPage = () => {
           <StatCard label="Lessons" value={`${t.lessonsCompleted}/${t.lessonsPublished}`} hint="completed" />
         </Grid>
         <Grid size={{ xs: 6, sm: 3, lg: 3 }}>
-          <StatCard label="Labs" value={`${t.labsCompleted}/${t.labsTotal}`} hint={`${data.inProgressLabs.length} in progress`} />
+          <StatCard label="Labs" value={`${t.labsCompleted}/${t.labsTotal}`} hint={`${labsInProgress.length} in progress`} />
         </Grid>
         <Grid size={{ xs: 6, sm: 6, lg: 3 }}>
           <StatCard label="Quizzes passed" value={`${t.quizzesPassed}/${t.quizzesTotal}`} />
@@ -198,13 +209,13 @@ export const DashboardPage = () => {
                 <Typography variant="h6" gutterBottom>
                   Focus areas
                 </Typography>
-                {data.weakAreas.length === 0 ? (
+                {cp.weakAreas.length === 0 ? (
                   <Typography variant="body2" color="text.secondary">
                     Nothing stands out yet. Take module quizzes to get specific feedback.
                   </Typography>
                 ) : (
                   <Stack spacing={1}>
-                    {data.weakAreas.map(w => (
+                    {cp.weakAreas.map(w => (
                       <Alert key={w.domain} severity="warning" variant="outlined" sx={{ py: 0 }}>
                         <strong>{index.domains.get(w.domain)?.title}</strong>
                         <br />
@@ -219,13 +230,13 @@ export const DashboardPage = () => {
               <CardContent sx={{ pb: 1 }}>
                 <Typography variant="h6">Recently viewed</Typography>
               </CardContent>
-              {data.recent.length === 0 ? (
+              {recent.length === 0 ? (
                 <Typography variant="body2" color="text.secondary" sx={{ px: 2, pb: 2 }}>
                   Lessons you open appear here.
                 </Typography>
               ) : (
                 <List dense disablePadding>
-                  {data.recent.slice(0, 5).map(r => {
+                  {recent.slice(0, 5).map(r => {
                     const link = lessonLink(index, r.lessonId);
                     return link ? (
                       <ListItemButton key={r.lessonId} component={RouterLink} to={link.to}>
@@ -246,13 +257,13 @@ export const DashboardPage = () => {
               <Typography variant="h6" gutterBottom>
                 Labs in progress
               </Typography>
-              {data.inProgressLabs.length === 0 ? (
+              {labsInProgress.length === 0 ? (
                 <Typography variant="body2" color="text.secondary">
                   No unfinished labs. <RouterLink to="/labs">Browse labs</RouterLink>
                 </Typography>
               ) : (
                 <Stack spacing={1}>
-                  {data.inProgressLabs.map(id => (
+                  {labsInProgress.map(id => (
                     <Card key={id} variant="outlined">
                       <CardActionArea component={RouterLink} to={`/labs/${id}`} sx={{ p: 1.5 }}>
                         <Typography fontWeight={500}>{index.curriculum.modules.flatMap(m => m.labs).find(l => l.id === id)?.title ?? id}</Typography>
@@ -270,13 +281,13 @@ export const DashboardPage = () => {
               <Typography variant="h6" gutterBottom>
                 Recent quiz results
               </Typography>
-              {data.recentQuizAttempts.length === 0 ? (
+              {quizAttempts.length === 0 ? (
                 <Typography variant="body2" color="text.secondary">
                   No quizzes taken yet. <RouterLink to="/quizzes">See quizzes</RouterLink>
                 </Typography>
               ) : (
                 <Stack spacing={1}>
-                  {data.recentQuizAttempts.map(a => (
+                  {quizAttempts.map(a => (
                     <Stack key={a.id} direction="row" justifyContent="space-between" alignItems="center">
                       <Typography variant="body2">
                         {index.curriculum.modules.flatMap(m => m.quizzes).find(q => q.id === a.quizId)?.title ?? a.quizId}

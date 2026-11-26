@@ -22,7 +22,9 @@ import ScheduleIcon from '@mui/icons-material/Schedule';
 import ScienceOutlinedIcon from '@mui/icons-material/ScienceOutlined';
 import QuizOutlinedIcon from '@mui/icons-material/QuizOutlined';
 import { ExerciseList } from '@/pages/exercises/ExerciseList';
+import { useEffect } from 'react';
 import { Link as RouterLink, useParams } from 'react-router-dom';
+import { selectCourse } from '@/hooks/useSelectedCourse';
 import { EmptyState, ErrorState, Loading } from '@/components/states';
 import { moduleCompletion, useCurriculum, useProgressIndex } from '@/hooks/useCurriculum';
 import { minutes } from '@/utils/format';
@@ -42,10 +44,15 @@ export const ModulePage = () => {
   const { moduleId = '' } = useParams();
   const { index, error, isLoading, refetch } = useCurriculum();
   const { index: progress } = useProgressIndex();
+  const courseId = index?.modules.get(moduleId)?.courseId;
+  useEffect(() => {
+    if (courseId) selectCourse(courseId);
+  }, [courseId]);
   if (error) return <ErrorState error={error} onRetry={refetch} />;
   if (isLoading || !index) return <Loading />;
   const m = index.modules.get(moduleId);
   if (!m) return <EmptyState title="Module not found">Check the link, or go back to the course.</EmptyState>;
+  const course = index.courses.get(m.courseId);
 
   const domain = index.domains.get(m.domain);
   const c = moduleCompletion(m, progress.status);
@@ -55,8 +62,8 @@ export const ModulePage = () => {
   return (
     <Box sx={{ maxWidth: 1100, mx: 'auto' }}>
       <Breadcrumbs sx={{ mb: 2 }}>
-        <Link component={RouterLink} to="/learn" underline="hover" color="inherit">
-          Course
+        <Link component={RouterLink} to={`/learn?course=${m.courseId}`} underline="hover" color="inherit">
+          {course?.code ?? 'Course'}
         </Link>
         <Typography color="text.primary">{m.title}</Typography>
       </Breadcrumbs>

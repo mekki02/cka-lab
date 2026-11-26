@@ -1,0 +1,258 @@
+---
+id: ckad-configmaps
+---
+
+The same image should run in development, staging and production. What changes between them — URLs, feature flags, log levels, whole configuration files — belongs **outside** the image. A ConfigMap holds that configuration as key/value pairs, and a Pod consumes it as environment variables or as files. Knowing which form updates live, and which does not, is a classic exam question.
+
+<Phase step="theory" />
+
+## What a ConfigMap is
+
+A ConfigMap is a namespaced object with a `data` map of **string** keys and values (and `binaryData` for bytes). A value can be a single word or a whole file:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shop-config
+data:
+  LOG_LEVEL: info                 # a simple value
+  FEATURE_CHECKOUT: "true"        # quoted: values are strings
+  nginx.conf: |                   # a whole file
+    server {
+      listen 8080;
+    }
+```
+
+Limits worth knowing: 1 MiB per ConfigMap; keys must be valid file names (`[-._a-zA-Z0-9]+`); and ConfigMaps are **not for secrets** — anyone who can read the namespace can read them.
+
+## Three ways to consume it
+
+| Form | In the Pod spec | Result | Updates when the ConfigMap changes? |
+|---|---|---|---|
+| One variable | `env[].valueFrom.configMapKeyRef` | `LOG_LEVEL=info` | **No** — only on container restart |
+| All keys as variables | `envFrom[].configMapRef` | one variable per key (`prefix` optional) | **No** |
+| Files | `volumes[].configMap` + `volumeMounts` | one file per key in the mount directory | **Yes**, after a short delay (unless mounted with `subPath`) |
+
+Environment variables are read once, when the process starts. Mounted files are refreshed by the kubelet (typically within a minute) — the application still has to re-read them.
+
+## Missing ConfigMaps and keys
+
+If a Pod references a ConfigMap (or a key) that does not exist, the container **does not start**: STATUS `CreateContainerConfigError`, and `describe` says which one is missing. Mark a reference `optional: true` when the app can live without it.
+
+<Phase step="visualization" />
+
+## From ConfigMap to container
+
+<Diagram
+  caption="One ConfigMap, consumed three ways. Only the volume follows later changes."
+  chart={`flowchart LR
+    CM["ConfigMap shop-config<br/>LOG_LEVEL, FEATURE_CHECKOUT, nginx.conf"]
+    CM -->|"configMapKeyRef"| E1["env LOG_LEVEL=info"]
+    CM -->|"envFrom"| E2["env LOG_LEVEL, FEATURE_CHECKOUT, …"]
+    CM -->|"volume"| F["/etc/shop/LOG_LEVEL<br/>/etc/shop/nginx.conf"]
+    E1 --> C["container"]
+    E2 --> C
+    F --> C`}
+/>
+
+<Phase step="command-line" />
+
+## Create ConfigMaps
+
+```bash
+k create configmap shop-config --from-literal=LOG_LEVEL=info --from-literal=FEATURE_CHECKOUT=true
+k create configmap nginx-conf --from-file=nginx.conf                 # key = file name
+k create configmap nginx-conf --from-file=default.conf=./site.conf   # choose the key
+k create configmap app-env --from-env-file=app.env                    # KEY=value lines → keys
+k create configmap all-files --from-file=./conf.d/                    # every file in a directory
+```
+
+```bash
+k get cm                                    # short name: cm
+k describe cm shop-config
+k get cm shop-config -o jsonpath='{.data.LOG_LEVEL}'
+k edit cm shop-config                       # or re-create with $do | k apply -f -
+```
+
+## Consume them
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: shop
+spec:
+  containers:
+  - name: shop
+    image: busybox:1.36
+    command: ["sh", "-c", "env | grep -E 'LEVEL|FEATURE' | sort; ls /etc/shop; sleep 3600"]
+    env:
+    - name: LEVEL                       # a single key, renamed
+      valueFrom:
+        configMapKeyRef:
+          name: shop-config
+          key: LOG_LEVEL
+    envFrom:
+    - configMapRef:                     # every key, with a prefix
+        name: shop-config
+      prefix: CFG_
+    volumeMounts:
+    - name: config
+      mountPath: /etc/shop
+      readOnly: true
+  volumes:
+  - name: config
+    configMap:
+      name: shop-config
+      # items:                          # only some keys, under chosen file names
+      # - key: LOG_LEVEL
+      #   path: level.txt
+```
+
+<Terminal
+  command="k logs shop"
+  output={`CFG_FEATURE_CHECKOUT=true
+CFG_LOG_LEVEL=info
+LEVEL=info
+FEATURE_CHECKOUT
+LOG_LEVEL`}
+/>
+
+## One file into an existing directory: subPath
+
+Mounting a volume at `/etc/nginx/conf.d` **hides** everything the image had there. To drop a single file into a directory, mount one key with `subPath`:
+
+```yaml
+volumeMounts:
+- name: nginx-conf
+  mountPath: /etc/nginx/conf.d/default.conf
+  subPath: default.conf
+```
+
+Trade-off: a `subPath` mount is **not** updated when the ConfigMap changes.
+
+<Callout type="exam" title="Exam tip">
+`kubectl set env` can wire a ConfigMap into a Deployment in one command: `k set env deploy/shop --from=configmap/shop-config` (all keys) or `--keys=LOG_LEVEL`. It edits the Pod template, so the Deployment rolls out new Pods.
+</Callout>
+
+<Phase step="example" />
+
+## Practical example: env does not update, files do
+
+```bash
+k create configmap live --from-literal=COLOR=blue
+k run viewer --image=busybox:1.36 $do -- sh -c 'while true; do echo "env=$COLOR file=$(cat /cfg/COLOR)"; sleep 5; done' > viewer.yaml
+# add env COLOR from configMapKeyRef live/COLOR, and mount configMap live at /cfg
+k apply -f viewer.yaml
+k create configmap live --from-literal=COLOR=green $do | k apply -f -
+k logs viewer -f            # after up to a minute: env=blue file=green
+```
+
+To pick up new environment values, restart the Pods: for a Deployment, `k rollout restart deploy/<name>`.
+
+<Phase step="guided" />
+
+## Guided exercise
+
+<Exercise kind="guided" title="Configure the shop">
+
+1. Create `shop-config` with `LOG_LEVEL=info` and `FEATURE_CHECKOUT=true`.
+2. Apply the `shop` Pod above.
+3. Read the logs, then `k exec shop -- cat /etc/shop/LOG_LEVEL`.
+4. Change `LOG_LEVEL` to `debug`. Which of the three places shows the new value, and when?
+
+<Solution>
+
+Only the file `/etc/shop/LOG_LEVEL` changes, after the kubelet's next sync (usually under a minute). `LEVEL` and `CFG_LOG_LEVEL` keep `info` until the container restarts.
+
+</Solution>
+</Exercise>
+
+<Phase step="challenge" />
+
+## Independent challenge
+
+<Exercise kind="challenge" title="Replace nginx's default site">
+
+Serve the following site configuration from nginx (image `nginx:1.27`) **without building an image**, keeping the rest of `/etc/nginx/conf.d` intact:
+
+```text
+server { listen 8080; location / { return 200 "configured by ConfigMap\n"; } }
+```
+
+<Solution>
+
+```bash
+echo 'server { listen 8080; location / { return 200 "configured by ConfigMap\n"; } }' > site.conf
+k create configmap site --from-file=default.conf=site.conf
+```
+
+```yaml
+spec:
+  containers:
+  - name: web
+    image: nginx:1.27
+    volumeMounts:
+    - name: site
+      mountPath: /etc/nginx/conf.d/default.conf
+      subPath: default.conf
+  volumes:
+  - name: site
+    configMap:
+      name: site
+```
+
+`k exec web -- curl -s localhost:8080` prints `configured by ConfigMap`.
+
+</Solution>
+</Exercise>
+
+<Phase step="troubleshooting" />
+
+## Troubleshooting
+
+<Exercise kind="troubleshooting" title="CreateContainerConfigError">
+
+A new Pod stays in `CreateContainerConfigError`. `describe` ends with `Error: couldn't find key LOGLEVEL in ConfigMap shop/shop-config`. What are the possible fixes?
+
+<Solution>
+
+The Pod references key `LOGLEVEL`, the ConfigMap has `LOG_LEVEL`. Either fix the reference in the Pod (or its Deployment), add the key to the ConfigMap, or mark the reference `optional: true` if the variable is not required. Once the key exists, the kubelet retries and the container starts — no need to recreate the Pod.
+
+</Solution>
+</Exercise>
+
+<Callout type="mistakes">
+
+- Expecting environment variables to change when the ConfigMap changes.
+- Mounting a ConfigMap over a directory the image needs (use `subPath` or another path).
+- Unquoted `true`/numbers in `data` — the API rejects non-string values.
+- Creating the ConfigMap in another namespace than the Pod.
+
+</Callout>
+
+<Phase step="check" />
+
+## Knowledge check
+
+<KnowledgeCheck
+  question="A ConfigMap is consumed by a running Pod both through envFrom and as a volume. You change a value. What does the container see?"
+  options={['Both the variable and the file change at once', 'The file changes after a short delay; the variable keeps its old value', 'The variable changes; the file keeps its old value', 'Nothing changes until the ConfigMap is recreated']}
+  answer={1}
+  explanation="Environment variables are fixed when the container starts. Files of a configMap volume (without subPath) are updated by the kubelet after a sync period."
+/>
+
+<KnowledgeCheck
+  question="Which command creates a ConfigMap whose key is default.conf from the local file site.conf?"
+  options={['k create cm site --from-literal=default.conf=site.conf', 'k create cm site --from-file=default.conf=site.conf', 'k create cm site --from-env-file=site.conf', 'k create cm site --from-file=site.conf --key=default.conf']}
+  answer={1}
+  explanation="--from-file=<key>=<path> sets the key. --from-literal would store the string 'site.conf' itself; --from-env-file parses KEY=value lines."
+/>
+
+## Clean up
+
+```bash
+kubectl delete pod shop viewer web --ignore-not-found --wait=false
+kubectl delete cm shop-config live site nginx-conf --ignore-not-found
+```

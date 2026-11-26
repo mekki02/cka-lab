@@ -24,7 +24,8 @@ try {
   const lessonsDir = join(contentDir, 'lessons');
   const expected = new Map<string, string>();
 
-  for (const m of bundle.curriculum.modules) {
+  const modules = bundle.courses.flatMap(c => c.modules);
+  for (const m of modules) {
     for (const l of m.lessons) {
       const file = join(lessonsDir, m.id, `${l.id}.mdx`);
       expected.set(file, l.status);
@@ -40,14 +41,14 @@ try {
     }
   }
   for (const file of walk(lessonsDir)) {
-    if (!expected.has(file)) problems.push(`orphan lesson file (not in curriculum.yaml): ${relative(contentDir, file)}`);
+    if (!expected.has(file)) problems.push(`orphan lesson file (not in any courses/*.yaml): ${relative(contentDir, file)}`);
   }
   if (problems.length) throw new ContentError(problems);
 
-  const lessons = bundle.curriculum.modules.flatMap(m => m.lessons);
+  const lessons = modules.flatMap(m => m.lessons);
   const published = lessons.filter(l => l.status === 'published').length;
   console.log(
-    `Content OK: ${bundle.curriculum.modules.length} modules, ${published}/${lessons.length} lessons published, ` +
+    `Content OK: ${bundle.courses.map(c => c.code).join(' + ')}: ${modules.length} modules, ${published}/${lessons.length} lessons published, ` +
       `${bundle.labs.size} labs, ${bundle.exercises.size} exercises, ${bundle.quizzes.size} quizzes ` +
       `(${[...bundle.quizzes.values()].reduce((n, q) => n + q.questions.length, 0)} questions), ` +
       `${bundle.exams.size} mock exams, ${bundle.cheatsheets.length} cheat sheets.`,

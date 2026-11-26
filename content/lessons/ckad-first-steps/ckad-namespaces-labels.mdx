@@ -1,0 +1,217 @@
+---
+id: ckad-namespaces-labels
+---
+
+A real cluster holds thousands of objects. Two mechanisms keep them manageable: **namespaces** split them into separate spaces, and **labels** tag them so you — and controllers — can select groups of them. Labels are not just organisation: they are how a Deployment finds its Pods and how a Service finds where to send traffic. Get a label wrong and nothing connects.
+
+<Phase step="theory" />
+
+## Namespaces
+
+A namespace is a scope for names. Two teams can both have a Deployment called `api` if they live in different namespaces. Namespaces are also where **quotas**, **RBAC permissions** and **NetworkPolicies** apply.
+
+- Every cluster has `default`, `kube-system` (cluster components), `kube-public` and `kube-node-lease`.
+- Most objects are **namespaced** (Pods, Deployments, Services, ConfigMaps…). A few are **cluster-scoped** (Nodes, Namespaces, PersistentVolumes, ClusterRoles). `kubectl api-resources --namespaced=false` lists them.
+- A Pod can only use ConfigMaps, Secrets and ServiceAccounts **from its own namespace**.
+
+## Labels
+
+Labels are `key: value` pairs in `metadata.labels`. They mean nothing to Kubernetes by themselves; you give them meaning by **selecting** on them.
+
+```yaml
+metadata:
+  labels:
+    app: shop
+    tier: backend
+    version: "2.1"
+```
+
+## Selectors
+
+| Kind | Syntax | Matches |
+|---|---|---|
+| Equality | `app=shop`, `tier!=frontend` | exact value |
+| Set | `env in (prod,staging)`, `tier notin (cache)` | one of several values |
+| Existence | `version`, `!canary` | key present / absent |
+
+Several selectors separated by commas are **AND**ed: `app=shop,tier=backend`.
+
+Controllers use selectors too. A Deployment's `spec.selector.matchLabels` must match the labels of its Pod template — that is how it recognises "its" Pods. A Service's `spec.selector` picks the Pods it sends traffic to.
+
+## Annotations
+
+`metadata.annotations` also hold key/value pairs, but **you cannot select on them**. They carry information for tools and humans: a description, a change reason, settings for an ingress controller, the last applied configuration. Rule of thumb: if you want to find objects by it, it is a label; otherwise an annotation.
+
+<Phase step="visualization" />
+
+## Labels connect objects
+
+<Diagram
+  caption="Deployments and Services find Pods only through labels. A Pod with matching labels is selected — whoever created it."
+  chart={`flowchart LR
+    D["Deployment shop<br/>selector: app=shop"] -.selects.-> P1
+    D -.selects.-> P2
+    S["Service shop<br/>selector: app=shop,tier=backend"] -.selects.-> P1
+    S -.selects.-> P2
+    P1["Pod  app=shop tier=backend"]
+    P2["Pod  app=shop tier=backend"]
+    P3["Pod  app=shop tier=frontend"]
+    D -.selects.-> P3`}
+/>
+
+<Phase step="command-line" />
+
+## Working with namespaces
+
+```bash
+k create namespace team-a
+k get pods -n team-a                       # one namespace
+k get pods -A                              # all namespaces (adds a NAMESPACE column)
+k run web --image=nginx:1.27 -n team-a
+k config set-context --current --namespace=team-a   # make team-a the default for this context
+k config view --minify -o jsonpath='{..namespace}'  # which namespace am I in?
+```
+
+<Callout type="exam" title="Exam tip">
+Many tasks say "in namespace X". Put `-n X` on **every** command (including generators: `k run web … -n X $do`) rather than switching the default namespace — a forgotten switch-back silently breaks the next task.
+</Callout>
+
+## Working with labels
+
+```bash
+k get pods --show-labels
+k get pods -L app,tier                      # labels as columns
+k get pods -l app=shop,tier=backend
+k get pods -l 'env in (prod,staging)'
+k label pod web tier=frontend               # add
+k label pod web tier=backend --overwrite    # change
+k label pod web tier-                       # remove (key followed by -)
+k annotate deploy shop owner='team-a'       # annotations work the same way
+```
+
+<Terminal
+  command="k get pods -l app=shop -L tier"
+  output={`NAME                    READY   STATUS    RESTARTS   AGE   TIER
+shop-5b7f9c8d4c-2x7mq   1/1     Running   0          2m    backend
+shop-5b7f9c8d4c-9kq2v   1/1     Running   0          2m    backend`}
+/>
+
+## Labels on many objects at once
+
+Selectors work with most verbs:
+
+```bash
+k delete pods -l tier=cache
+k label pods -l app=shop release=2026-11     # label every matching Pod
+k get all -l app=shop                        # Deployments, ReplicaSets, Pods, Services with that label
+```
+
+<Phase step="example" />
+
+## Practical example: taking a Pod out of rotation
+
+A Pod behaves strangely and you want to keep it for debugging without it receiving traffic or being counted by its Deployment. Change the label the controllers select on:
+
+```bash
+k create deployment shop --image=nginx:1.27 --replicas=3
+POD=$(k get pods -l app=shop -o jsonpath='{.items[0].metadata.name}')
+k label pod $POD app=shop-debug --overwrite
+k get pods -L app
+```
+
+The Deployment's ReplicaSet no longer sees that Pod as its own, so it creates a **fourth** Pod to get back to 3 replicas with `app=shop`. The relabelled Pod keeps running, now orphaned, ready for you to inspect.
+
+<Phase step="guided" />
+
+## Guided exercise
+
+<Exercise kind="guided" title="Find by label, change by label">
+
+1. Create namespace `lab-labels` and three Pods there: `a` and `b` with `env=prod`, `c` with `env=dev` (image `nginx:1.27`, use `--labels`).
+2. List only the prod Pods, with the `env` label as a column.
+3. Add `team=web` to every prod Pod in one command.
+4. Remove the `env` label from `c`.
+
+<Solution>
+
+```bash
+k create ns lab-labels
+k -n lab-labels run a --image=nginx:1.27 --labels=env=prod
+k -n lab-labels run b --image=nginx:1.27 --labels=env=prod
+k -n lab-labels run c --image=nginx:1.27 --labels=env=dev
+k -n lab-labels get pods -l env=prod -L env
+k -n lab-labels label pods -l env=prod team=web
+k -n lab-labels label pod c env-
+```
+
+</Solution>
+</Exercise>
+
+<Phase step="challenge" />
+
+## Independent challenge
+
+<Exercise kind="challenge" title="Count across the cluster">
+
+Print the number of Pods in **all** namespaces that have the label `k8s-app` (any value), as a single number.
+
+<Solution>
+
+```bash
+k get pods -A -l k8s-app --no-headers | wc -l
+```
+
+`-l k8s-app` is an existence selector; `--no-headers` keeps the header line out of the count.
+
+</Solution>
+</Exercise>
+
+<Phase step="troubleshooting" />
+
+## Troubleshooting
+
+<Exercise kind="troubleshooting" title="The Deployment that was rejected">
+
+`k apply -f deploy.yaml` fails with: `The Deployment "api" is invalid: spec.template.metadata.labels: Invalid value: …: selector does not match template labels`. What is wrong?
+
+<Solution>
+
+`spec.selector.matchLabels` must be a subset of `spec.template.metadata.labels`, otherwise the Deployment could never find the Pods it creates. Make them agree (for example both `app: api`). Note that a Deployment's selector cannot be changed after creation — to change it, delete and recreate the Deployment.
+
+</Solution>
+</Exercise>
+
+<Callout type="mistakes">
+
+- Looking for an object in `default` when it lives in another namespace.
+- Expecting to select on annotations.
+- Relabelling Pods of a Deployment and being surprised that a new Pod appears.
+- Referencing a ConfigMap or Secret from another namespace in a Pod.
+
+</Callout>
+
+<Phase step="check" />
+
+## Knowledge check
+
+<KnowledgeCheck
+  question="Which selector matches Pods labelled env=prod OR env=staging?"
+  options={['-l env=prod,env=staging', "-l 'env in (prod,staging)'", '-l env=prod -l env=staging', '-l env!=dev']}
+  answer={1}
+  explanation="Comma-separated selectors are ANDed (a Pod cannot have both values). The set-based 'in' selector expresses OR on one key. env!=dev would also match Pods with no env label."
+/>
+
+<KnowledgeCheck
+  question="A Pod in namespace shop references the ConfigMap settings, which exists only in namespace default. What happens?"
+  options={['It works: ConfigMaps are cluster-wide', 'The Pod cannot start its container: the ConfigMap is looked up in the Pod own namespace', 'Kubernetes copies the ConfigMap', 'The Pod falls back to empty values']}
+  answer={1}
+  explanation="Pods can only reference ConfigMaps, Secrets and ServiceAccounts from their own namespace. The container stays in CreateContainerConfigError until a ConfigMap of that name exists in shop."
+/>
+
+## Clean up
+
+```bash
+kubectl delete ns lab-labels --ignore-not-found --wait=false
+kubectl delete deploy shop --ignore-not-found
+kubectl delete pods -l app=shop-debug --ignore-not-found
+```

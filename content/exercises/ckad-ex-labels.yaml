@@ -1,0 +1,85 @@
+id: ckad-ex-labels
+title: "The Service that selects nothing"
+module: ckad-first-steps
+lesson: ckad-namespaces-labels
+kind: exercise
+difficulty: beginner
+minutes: 10
+order: 1
+tags: [labels, selectors, annotations]
+namespaces: [ex-labels]
+setup: |
+  kubectl -n ex-labels run shop-1 --image=nginx:1.27 --labels=app=shop,tier=back,env=prod
+  kubectl -n ex-labels run shop-2 --image=nginx:1.27 --labels=app=shop,tier=back,env=prod
+  kubectl -n ex-labels run shop-3 --image=nginx:1.27 --labels=app=shop,tier=back,env=dev,temp=true
+  kubectl -n ex-labels run cache --image=nginx:1.27 --labels=app=cache,env=prod
+  kubectl -n ex-labels create service clusterip shop --tcp=80:80 --dry-run=client -o yaml \
+    | yq '.spec.selector = {"app": "shop", "tier": "backend"}' | kubectl apply -f -
+statement: |
+  In namespace `ex-labels`, the Service `shop` has no endpoints: it selects Pods with
+  `app=shop,tier=backend`, but the shop Pods were labelled differently.
+
+  1. Show the Pods with their labels and compare them with the Service's selector
+     (`k -n ex-labels describe svc shop`).
+  2. Fix the **Pods' labels** (do not change the Service) so that the Service selects the three shop Pods.
+  3. Remove the label `temp` from `shop-3`.
+  4. Add the annotation `owner=team-shop` to every Pod labelled `env=prod`, in one command.
+  5. How many Pods in the namespace have `env=prod`?
+inputs:
+  - id: prod-count
+    label: Number of env=prod Pods
+    placeholder: a number
+checks:
+  - id: endpoints
+    description: Service shop has the 3 shop Pods as endpoints
+    type: cluster
+    command: kubectl -n ex-labels get endpointslices -l kubernetes.io/service-name=shop -o jsonpath='{range .items[*].endpoints[*]}{.addresses[0]}{"\n"}{end}' | grep -c . || true
+    expect: "3"
+    match: number
+  - id: service-unchanged
+    description: The Service selector was not changed
+    type: cluster
+    command: kubectl -n ex-labels get svc shop -o jsonpath='{.spec.selector.app},{.spec.selector.tier}'
+    expect: shop,backend
+    match: exact
+  - id: temp-removed
+    description: shop-3 has no temp label
+    type: cluster
+    command: kubectl -n ex-labels get pod shop-3 -o jsonpath='{.metadata.labels.temp}'
+    expect: '^$'
+    match: regex
+  - id: annotated
+    description: Every env=prod Pod is annotated owner=team-shop
+    type: cluster
+    command: kubectl -n ex-labels get pods -l env=prod -o jsonpath='{range .items[*]}{.metadata.annotations.owner}{"\n"}{end}' | sort -u
+    expect: team-shop
+    match: exact
+  - id: prod-count
+    description: You counted the prod Pods
+    type: answer
+    input: prod-count
+    expect: "3"
+    match: number
+hints:
+  - "`k -n ex-labels get pods --show-labels`"
+  - "`k -n ex-labels label pods -l app=shop tier=backend --overwrite` relabels all three at once."
+  - "A label is removed with its key followed by a dash: `temp-`. Selectors work with annotate too: `k annotate pods -l env=prod …`."
+solution: |
+  ```bash
+  k -n ex-labels get pods --show-labels
+  k -n ex-labels label pods -l app=shop tier=backend --overwrite
+  k -n ex-labels label pod shop-3 temp-
+  k -n ex-labels annotate pods -l env=prod owner=team-shop
+  k -n ex-labels get pods -l env=prod --no-headers | wc -l       # 3 (shop-1, shop-2, cache)
+  k -n ex-labels get endpointslices -l kubernetes.io/service-name=shop
+  ```
+
+  Changing the Service would also work technically, but other Pods and tools may rely on its selector — the
+  task says the Pods were labelled wrongly, so fix the Pods.
+autotest:
+  solve: |
+    kubectl -n ex-labels label pods -l app=shop tier=backend --overwrite
+    kubectl -n ex-labels label pod shop-3 temp-
+    kubectl -n ex-labels annotate pods -l env=prod owner=team-shop
+  answers:
+    prod-count: "3"

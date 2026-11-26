@@ -1,0 +1,256 @@
+---
+id: ckad-sidecars-patterns
+---
+
+Init containers prepare and then leave. **Sidecars** stay: they run next to the application for the Pod's whole life and add something to it — ship its logs, refresh its configuration, proxy its traffic — without changing its image. Kubernetes now has first-class support for them ("native sidecars"), and the exam expects you to know both the native form and the classic patterns.
+
+<Phase step="theory" />
+
+## Native sidecar containers
+
+A native sidecar is an **init container with `restartPolicy: Always`**:
+
+```yaml
+spec:
+  initContainers:
+  - name: log-shipper
+    image: busybox:1.36
+    restartPolicy: Always          # this makes it a sidecar
+    command: ["sh", "-c", "tail -F /var/log/app/app.log"]
+```
+
+Compared with a second entry in `containers`, it:
+
+- **starts before** the app containers (and, with a startup probe, can be required to be ready first);
+- keeps running — and is restarted if it exits — for the Pod's lifetime;
+- **stops after** the app containers when the Pod shuts down, so the last log lines still get shipped;
+- does **not** keep a Job's Pod alive: when the main container of a Job finishes, the sidecar is stopped and the Job completes. (A second regular container running `tail -F` would block the Job forever.)
+
+Native sidecars are stable since Kubernetes 1.33. You still meet the older style everywhere: a second container in `spec.containers`. Both are "sidecars" in the pattern sense.
+
+## The classic patterns
+
+| Pattern | The helper container… | Example |
+|---|---|---|
+| **Sidecar** | extends or supports the app | ship log files, sync files from git, renew certificates |
+| **Adapter** | transforms the app's output into a standard form | convert a custom status page into Prometheus metrics |
+| **Ambassador** | proxies the app's outgoing connections | the app talks to `localhost:6379`; the ambassador routes to the right Redis |
+
+All three rely on the two things a Pod shares: **volumes** (the log file, the synced content) and **localhost** (the proxy, the metrics endpoint).
+
+<Phase step="visualization" />
+
+## A log-shipping sidecar
+
+<Diagram
+  caption="The app writes a file; the sidecar reads the same emptyDir and streams it. Neither image knows about the other."
+  chart={`flowchart LR
+    subgraph Pod
+      A["app: writes /var/log/app/app.log"] --> V[("emptyDir logs")]
+      V --> S["sidecar: tail -F → stdout"]
+    end
+    S --> K["kubectl logs pod -c sidecar / log collector"]`}
+/>
+
+## Startup and shutdown order
+
+<Diagram
+  caption="Native sidecars wrap the app containers: first up, last down."
+  chart={`flowchart LR
+    I["regular init containers (run to completion)"] --> SC["sidecars start (restartPolicy: Always)"]
+    SC --> APP["app containers run"]
+    APP --> STOP["Pod stops: app containers stop first"]
+    STOP --> SCSTOP["then sidecars stop"]`}
+/>
+
+<Phase step="command-line" />
+
+## A complete example
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: shop
+spec:
+  initContainers:
+  - name: log-shipper                  # native sidecar
+    image: busybox:1.36
+    restartPolicy: Always
+    command: ["sh", "-c", "touch /var/log/app/app.log; tail -F /var/log/app/app.log"]
+    volumeMounts:
+    - name: logs
+      mountPath: /var/log/app
+  containers:
+  - name: app
+    image: busybox:1.36
+    command: ["sh", "-c", "while true; do echo \"$(date) order received\" >> /var/log/app/app.log; sleep 5; done"]
+    volumeMounts:
+    - name: logs
+      mountPath: /var/log/app
+  volumes:
+  - name: logs
+    emptyDir: {}
+```
+
+```bash
+k apply -f shop.yaml
+k get pod shop                         # READY 2/2: sidecars count as containers
+k logs shop -c log-shipper -f          # the app's file, as a log stream
+k logs shop --all-containers           # every container at once
+k exec shop -c app -- ls /var/log/app  # pick a container for exec too
+```
+
+<Terminal
+  command={`k get pod shop -o jsonpath='{range .spec.initContainers[*]}{.name}{" restartPolicy="}{.restartPolicy}{"\\n"}{end}'`}
+  output={`log-shipper restartPolicy=Always`}
+/>
+
+## Talking over localhost
+
+Containers of a Pod share the network: a helper listening on port 8080 is reachable by the app at `localhost:8080`, and two containers **cannot** both listen on the same port.
+
+```yaml
+containers:
+- name: web
+  image: nginx:1.27                     # listens on 80
+- name: probe
+  image: busybox:1.36
+  command: ["sh", "-c", "while true; do wget -qO- localhost:80 >/dev/null && echo up; sleep 10; done"]
+```
+
+<Callout type="exam" title="Exam tip">
+"Add a sidecar to the existing Deployment" means editing the **Pod template** (`spec.template.spec`) of the Deployment, then letting it roll out. Use `k edit deploy <name>` or export it with `k get deploy <name> -o yaml > d.yaml`, edit, and `k apply -f d.yaml`. Keep the existing container untouched.
+</Callout>
+
+<Phase step="example" />
+
+## Practical example: an adapter
+
+The app writes its status in its own format; monitoring expects one line `requests_total <n>`:
+
+```yaml
+containers:
+- name: app
+  image: busybox:1.36
+  command: ["sh", "-c", "i=0; while true; do i=$((i+1)); echo \"served=$i\" > /status/raw; sleep 2; done"]
+  volumeMounts: [{ name: status, mountPath: /status }]
+- name: adapter
+  image: busybox:1.36
+  command: ["sh", "-c", "while true; do sed 's/served=/requests_total /' /status/raw; sleep 5; done"]
+  volumeMounts: [{ name: status, mountPath: /status }]
+volumes:
+- name: status
+  emptyDir: {}
+```
+
+`k logs <pod> -c adapter` prints `requests_total 12`, `requests_total 15`… — the app image was not touched.
+
+<Phase step="guided" />
+
+## Guided exercise
+
+<Exercise kind="guided" title="Ship the logs of shop">
+
+1. Apply the `shop` Pod above.
+2. Confirm `READY 2/2`.
+3. Stream the sidecar's logs and watch a new order line arrive every 5 seconds.
+4. Delete the Pod and watch its events: the app stops first.
+
+<Solution>
+
+```bash
+k apply -f shop.yaml && k get pod shop
+k logs shop -c log-shipper -f
+k delete pod shop && k get events --field-selector involvedObject.name=shop | tail
+```
+
+</Solution>
+</Exercise>
+
+<Phase step="challenge" />
+
+## Independent challenge
+
+<Exercise kind="challenge" title="A sidecar for a Job">
+
+A Job `export` writes progress lines to `/out/progress.log` and finishes after ~10 seconds. Add a sidecar that streams the file to its own stdout, **without preventing the Job from completing**.
+
+<Solution>
+
+Use a native sidecar — an init container with `restartPolicy: Always`:
+
+```yaml
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+      - name: progress
+        image: busybox:1.36
+        restartPolicy: Always
+        command: ["sh", "-c", "touch /out/progress.log; tail -F /out/progress.log"]
+        volumeMounts: [{ name: out, mountPath: /out }]
+      containers:
+      - name: export
+        image: busybox:1.36
+        command: ["sh", "-c", "for i in 1 2 3 4 5; do echo step $i >> /out/progress.log; sleep 2; done"]
+        volumeMounts: [{ name: out, mountPath: /out }]
+      volumes:
+      - name: out
+        emptyDir: {}
+```
+
+When `export` exits 0, Kubernetes stops the sidecar and the Job is Complete. With the `tail -F` container in `containers` instead, the Pod would never finish.
+
+</Solution>
+</Exercise>
+
+<Phase step="troubleshooting" />
+
+## Troubleshooting
+
+<Exercise kind="troubleshooting" title="READY 1/2">
+
+A Pod with an nginx container and a "metrics" sidecar shows `READY 1/2` and the sidecar restarts constantly. Its log says `bind: address already in use`. Explain.
+
+<Solution>
+
+Both containers share one network namespace, so they share ports. The sidecar tries to listen on port 80 (or another port nginx already uses). Configure the sidecar to listen on a different port (for example 9113 for an exporter).
+
+</Solution>
+</Exercise>
+
+<Callout type="mistakes">
+
+- Writing `restartPolicy: Always` on a **regular** container (only init containers accept a per-container restart policy).
+- Mounting the shared volume in only one container.
+- Two containers listening on the same port.
+- Running a `tail -F` helper as a regular container in a Job — the Job never completes.
+
+</Callout>
+
+<Phase step="check" />
+
+## Knowledge check
+
+<KnowledgeCheck
+  question="How do you declare a native sidecar container?"
+  options={['A container in spec.containers with sidecar: true', 'An init container with restartPolicy: Always', 'A container with lifecycle.postStart', 'A second Pod with the same labels']}
+  answer={1}
+  explanation="Native sidecars are init containers whose restartPolicy is Always: they start before the app containers, run for the Pod's lifetime and stop after them."
+/>
+
+<KnowledgeCheck
+  question="The app must connect to a database through a local proxy that handles TLS and failover. The proxy runs in the same Pod. Which pattern is this, and which address does the app use?"
+  options={['Adapter; the Pod IP of the database', 'Ambassador; localhost and the proxy port', 'Sidecar; the Service of the proxy', 'Init container; the database Service']}
+  answer={1}
+  explanation="An ambassador proxies outgoing connections. Containers in a Pod share the network namespace, so the app reaches it on localhost."
+/>
+
+## Clean up
+
+```bash
+kubectl delete pod shop --ignore-not-found
+kubectl delete job export --ignore-not-found
+```

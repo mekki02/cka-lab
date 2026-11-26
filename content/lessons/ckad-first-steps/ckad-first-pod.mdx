@@ -1,0 +1,229 @@
+---
+id: ckad-first-pod
+---
+
+Time to run something. In this lesson you create Pods, look inside them, read their logs, run commands in them and learn to read the `STATUS` column — the first thing you check in every exam task and every incident.
+
+<Phase step="theory" />
+
+## What is in a Pod
+
+A Pod wraps one or more **containers** with what they share:
+
+- **one network identity** — one IP address; containers in the Pod talk to each other on `localhost`;
+- **volumes** — directories that several containers can mount;
+- **a restart policy** — what the kubelet (the agent on each node) does when a container exits.
+
+Each container has an **image** (what to run), optionally a **command** and **args** (override the image's default), **ports** (documentation, mostly), **env** variables and **resources**.
+
+## The Pod lifecycle
+
+A Pod has a **phase**, and each of its containers has a **state**:
+
+| Pod phase | Meaning |
+|---|---|
+| `Pending` | Accepted, but not running yet: waiting to be scheduled or pulling images |
+| `Running` | Bound to a node; at least one container is running (or restarting) |
+| `Succeeded` | All containers exited with code 0 and will not restart |
+| `Failed` | All containers exited, at least one with a non-zero code, and will not restart |
+| `Unknown` | The node stopped reporting |
+
+`kubectl get pods` shows a friendlier **STATUS** that mixes both — `ContainerCreating`, `ImagePullBackOff`, `CrashLoopBackOff`, `Completed`, `Error`. Learn these:
+
+| STATUS | Usually means | Look at |
+|---|---|---|
+| `ImagePullBackOff` / `ErrImagePull` | Wrong image name or tag, or a private registry without credentials | `kubectl describe pod` → Events |
+| `CrashLoopBackOff` | The container starts and exits again and again; the kubelet waits longer between restarts each time | `kubectl logs --previous` |
+| `Completed` | The main process exited 0 (normal for a Job, a bug for a web server) | the command |
+| `Pending` (for long) | No node can fit it (resources, node selector) | `describe` → Events |
+
+## Restart policy
+
+`spec.restartPolicy` applies to every container of the Pod:
+
+| Value | Restarts a container when it exits… | Typical for |
+|---|---|---|
+| `Always` (default) | always | long-running servers |
+| `OnFailure` | only with a non-zero exit code | Jobs that should retry |
+| `Never` | never | one-shot tasks, debugging |
+
+`kubectl run` creates a Pod with `Always` unless you say `--restart=Never`.
+
+<Phase step="visualization" />
+
+## A Pod and the commands that look at it
+
+<Diagram
+  caption="describe and get read the API; logs and exec reach the container through the kubelet."
+  chart={`flowchart LR
+    K["kubectl"] -->|"get / describe"| API["API server"]
+    K -->|"logs / exec"| API
+    API -->|"proxied"| KL["kubelet on the node"]
+    subgraph Pod["Pod web (IP 10.244.1.7)"]
+      C1["container: nginx"]
+    end
+    KL --> Pod`}
+/>
+
+<Phase step="command-line" />
+
+## Create, look, enter, delete
+
+```bash
+k run web --image=nginx:1.27 --port=80          # a Pod named web
+k get pods -o wide                               # + IP and node
+k describe pod web                               # spec, state, conditions, events
+k logs web                                       # stdout/stderr of the container
+k logs web -f                                    # follow
+k exec web -- nginx -v                           # run one command in the container
+k exec -it web -- sh                             # interactive shell (exit to leave)
+k delete pod web                                 # graceful: waits up to 30 s
+```
+
+<Terminal
+  command="k describe pod web | sed -n '/^Events/,$p'"
+  output={`Events:
+  Type    Reason     Age   From               Message
+  ----    ------     ----  ----               -------
+  Normal  Scheduled  12s   default-scheduler  Successfully assigned default/web to worker-1
+  Normal  Pulling    11s   kubelet            Pulling image "nginx:1.27"
+  Normal  Pulled     6s    kubelet            Successfully pulled image "nginx:1.27"
+  Normal  Created    6s    kubelet            Created container: web
+  Normal  Started    6s    kubelet            Started container web`}
+/>
+
+The **Events** section is a timeline of what happened to the Pod. When something is wrong, the answer is usually in the last lines.
+
+## Running a command instead of the image default
+
+Everything after `--` becomes the container's command:
+
+```bash
+k run once --image=busybox:1.36 --restart=Never -- sh -c 'echo hello from $(hostname)'
+k logs once            # hello from once
+k get pod once         # STATUS Completed
+```
+
+## Throw-away Pods for testing
+
+`--rm -it` attaches your terminal and deletes the Pod when you exit. Perfect to test something from inside the cluster:
+
+```bash
+k run tmp --rm -it --restart=Never --image=busybox:1.36 -- wget -qO- http://10.244.1.7
+```
+
+<Callout type="exam" title="Exam tip">
+Deleting a Pod waits for a graceful shutdown (up to 30 seconds by default). In practice namespaces you can skip the wait with `k delete pod x --force --grace-period=0` — never do that to a real database.
+</Callout>
+
+<Phase step="example" />
+
+## Practical example: a crash loop, read properly
+
+```bash
+k run crasher --image=busybox:1.36 -- sh -c 'echo starting; echo "config missing" >&2; exit 1'
+k get pod crasher -w        # Error → CrashLoopBackOff, RESTARTS climbing (Ctrl-C to stop)
+k logs crasher              # output of the current attempt (may be empty while it waits)
+k logs crasher --previous   # output of the last attempt that crashed
+k get pod crasher -o jsonpath='{.status.containerStatuses[0].lastState.terminated.exitCode}'   # 1
+```
+
+`--previous` is the key: the current container may not have printed anything yet, the previous one tells you **why** it died.
+
+<Phase step="guided" />
+
+## Guided exercise
+
+<Exercise kind="guided" title="Into the container">
+
+1. Run `k run web --image=nginx:1.27`.
+2. Find its IP with `k get pod web -o wide`.
+3. Open a shell in it and print the nginx default page from **inside** the Pod: `k exec -it web -- sh`, then `curl -s localhost | head -5` (or `wget -qO- localhost` if curl is missing).
+4. From a second, temporary Pod, fetch the page through the Pod IP.
+
+<Solution>
+
+```bash
+k exec web -- sh -c 'curl -s localhost | head -5'
+IP=$(k get pod web -o jsonpath='{.status.podIP}')
+k run tmp --rm -it --restart=Never --image=busybox:1.36 -- wget -qO- http://$IP | head -5
+```
+
+Both print the `Welcome to nginx!` page: the first via `localhost` inside the Pod, the second over the Pod network.
+
+</Solution>
+</Exercise>
+
+<Phase step="challenge" />
+
+## Independent challenge
+
+<Exercise kind="challenge" title="A Pod that finishes">
+
+Create a Pod `count` with image `busybox:1.36` that prints the numbers 1 to 5, one per line, and then **stays Completed** instead of restarting. Show its output.
+
+<Solution>
+
+```bash
+k run count --image=busybox:1.36 --restart=Never -- sh -c 'for i in 1 2 3 4 5; do echo $i; done'
+k get pod count     # Completed
+k logs count
+```
+
+Without `--restart=Never`, the restart policy is `Always`: the container would exit 0, be restarted, and end up in `CrashLoopBackOff` with a perfectly correct log.
+
+</Solution>
+</Exercise>
+
+<Phase step="troubleshooting" />
+
+## Troubleshooting
+
+<Exercise kind="troubleshooting" title="ImagePullBackOff">
+
+`k run api --image=nginx:1.277` stays in `ImagePullBackOff`. Find the evidence and fix it.
+
+<Solution>
+
+```bash
+k describe pod api | tail -5
+#  Failed to pull image "nginx:1.277": … not found
+k set image pod/api api=nginx:1.27     # the image is one of the few mutable Pod fields
+```
+
+Most Pod fields cannot be changed once it exists; `image` can. For anything else, delete and recreate the Pod (or fix its Deployment).
+
+</Solution>
+</Exercise>
+
+<Callout type="mistakes">
+
+- Reading `k logs` of a crash-looping container instead of `k logs --previous`.
+- Forgetting `--restart=Never` for one-shot Pods and seeing `CrashLoopBackOff` with exit code 0.
+- Putting kubectl flags after `--`: they become arguments of the container.
+
+</Callout>
+
+<Phase step="check" />
+
+## Knowledge check
+
+<KnowledgeCheck
+  question="A web server Pod shows STATUS CrashLoopBackOff and RESTARTS 6. What is the fastest way to see why it fails?"
+  options={['kubectl get pod -o wide', 'kubectl logs <pod> --previous', 'kubectl delete pod and wait', 'kubectl get events -A']}
+  answer={1}
+  explanation="CrashLoopBackOff means the container keeps exiting. The logs of the previous (crashed) attempt usually contain the error message; describe shows the exit code and reason."
+/>
+
+<KnowledgeCheck
+  question="A Pod with restartPolicy OnFailure runs a script that exits with code 0. What happens?"
+  options={['The container is restarted', 'The Pod ends in phase Succeeded (STATUS Completed)', 'The Pod goes to CrashLoopBackOff', 'The Pod is deleted']}
+  answer={1}
+  explanation="OnFailure restarts only on a non-zero exit code. Exit 0 means success: the Pod is Succeeded and stays until deleted."
+/>
+
+## Clean up
+
+```bash
+kubectl delete pod web once crasher count api --ignore-not-found --wait=false
+```

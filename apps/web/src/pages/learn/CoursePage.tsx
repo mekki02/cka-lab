@@ -1,9 +1,12 @@
-import { Box, Card, CardActionArea, CardContent, Chip, Grid, LinearProgress, Stack, Typography } from '@mui/material';
+import { Alert, Box, Card, CardActionArea, CardContent, Chip, Grid, LinearProgress, Link, Stack, Typography } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import { Link as RouterLink } from 'react-router-dom';
+import { useEffect } from 'react';
+import { Link as RouterLink, useSearchParams } from 'react-router-dom';
 import type { CurriculumModule } from '@cka/contracts';
+import { CourseSwitcher } from '@/components/CourseSwitcher';
 import { ErrorState, Loading, PageHeader } from '@/components/states';
 import { moduleCompletion, useCurriculum, useProgressIndex } from '@/hooks/useCurriculum';
+import { useSelectedCourse } from '@/hooks/useSelectedCourse';
 import { minutes } from '@/utils/format';
 
 const ModuleCard = ({ m, n, status }: { m: CurriculumModule; n: number; status: Map<string, string> }) => {
@@ -45,56 +48,65 @@ const ModuleCard = ({ m, n, status }: { m: CurriculumModule; n: number; status: 
 export const CoursePage = () => {
   const { index, error, isLoading, refetch } = useCurriculum();
   const { index: progress } = useProgressIndex();
+  const [params] = useSearchParams();
+  const { course, select } = useSelectedCourse(params.get('course'));
+  // ?course=ckad (from a breadcrumb or a shared link) selects that course.
+  const wanted = params.get('course');
+  useEffect(() => {
+    if (wanted && index?.courses.has(wanted)) select(wanted);
+  }, [wanted, index, select]);
+
   if (error) return <ErrorState error={error} onRetry={refetch} />;
-  if (isLoading || !index) return <Loading />;
+  if (isLoading || !index || !course) return <Loading />;
 
   const { curriculum } = index;
-  let n = 0;
-  const numbered = new Map(curriculum.modules.map(m => [m.id, ++n]));
+  const modules = index.modulesOf(course.id);
+  const numbered = new Map(modules.map((m, i) => [m.id, i + 1]));
+  const lessons = modules.flatMap(m => m.lessons);
+  const published = lessons.filter(l => l.status === 'published').length;
 
   return (
     <Box sx={{ maxWidth: 1280, mx: 'auto' }}>
-      <PageHeader
-        overline="Course"
-        title="Certified Kubernetes Administrator"
-        subtitle={
-          <>
-            Organised around the official CKA domains and competencies (Kubernetes v{curriculum.kubernetesVersion}). Modules are ordered
-            for learning: foundations first, then each domain, then troubleshooting — which carries 30% of the exam.
-          </>
-        }
-      />
-      {curriculum.domains.map(d => {
-        const modules = curriculum.modules.filter(m => m.domain === d.id);
-        if (!modules.length) return null;
-        return (
-          <Box key={d.id} component="section" sx={{ mb: 5 }}>
-            <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 2 }}>
-              <Typography variant="h3" component="h2">
-                {d.title}
-              </Typography>
-              <Chip
-                size="small"
-                color={d.weight ? 'primary' : 'default'}
-                variant={d.weight ? 'filled' : 'outlined'}
-                label={d.weight ? `${d.weight}% of exam` : 'Not on the exam'}
-              />
-            </Stack>
-            {d.competencies.length > 0 && (
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 2, maxWidth: 900 }}>
-                Official competencies: {d.competencies.map(c => c.text).join(' · ')}
-              </Typography>
-            )}
-            <Grid container spacing={2}>
-              {modules.map(m => (
-                <Grid key={m.id} size={{ xs: 12, sm: 6, lg: 4 }}>
-                  <ModuleCard m={m} n={numbered.get(m.id)!} status={progress.status} />
-                </Grid>
-              ))}
-            </Grid>
-          </Box>
-        );
-      })}
+      <PageHeader overline={`${course.code} course`} title={course.title} subtitle={course.summary} actions={<CourseSwitcher />} />
+      <Alert severity="info" variant="outlined" sx={{ mb: 4 }}>
+        {course.audience} {modules.length} modules · {published}/{lessons.length} lessons published · Kubernetes v{curriculum.kubernetesVersion} ·{' '}
+        <Link href={course.source} target="_blank" rel="noreferrer">
+          official curriculum
+        </Link>
+      </Alert>
+      {curriculum.domains
+        .filter(d => d.courseId === course.id)
+        .map(d => {
+          const inDomain = modules.filter(m => m.domain === d.id);
+          if (!inDomain.length) return null;
+          return (
+            <Box key={d.id} component="section" sx={{ mb: 5 }}>
+              <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 2 }}>
+                <Typography variant="h3" component="h2">
+                  {d.title}
+                </Typography>
+                <Chip
+                  size="small"
+                  color={d.weight ? 'primary' : 'default'}
+                  variant={d.weight ? 'filled' : 'outlined'}
+                  label={d.weight ? `${d.weight}% of exam` : 'Not on the exam'}
+                />
+              </Stack>
+              {d.competencies.length > 0 && (
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2, maxWidth: 900 }}>
+                  Official competencies: {d.competencies.map(c => c.text).join(' · ')}
+                </Typography>
+              )}
+              <Grid container spacing={2}>
+                {inDomain.map(m => (
+                  <Grid key={m.id} size={{ xs: 12, sm: 6, lg: 4 }}>
+                    <ModuleCard m={m} n={numbered.get(m.id)!} status={progress.status} />
+                  </Grid>
+                ))}
+              </Grid>
+            </Box>
+          );
+        })}
     </Box>
   );
 };

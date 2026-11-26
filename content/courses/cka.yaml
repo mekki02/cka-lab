@@ -1,0 +1,837 @@
+# The CKA course: its exam domains, modules, lessons and their order.
+#
+# - domains[].competencies are the official CNCF CKA competencies, verbatim.
+#   `npm run content:check` fails if a competency is not covered by a module.
+# - Modules are ordered for learning (foundations first), not by exam domain.
+# - A lesson with status "published" must have a body at
+#   content/lessons/<module id>/<lesson id>.mdx. "planned" lessons appear in
+#   the outline as "coming soon".
+# - Lesson prerequisites default to the previous lesson of the same module.
+# - Module, lesson and domain ids are unique across ALL courses.
+#
+# See docs/CONTENT_AUTHORING.md.
+
+id: cka
+code: CKA
+title: Certified Kubernetes Administrator
+summary: >-
+  Run and fix clusters: architecture, installation with kubeadm, RBAC, scheduling, networking, storage and
+  troubleshooting — the exam where 30% of the points are about repairing what is broken.
+audience: Operators and platform engineers. Comfortable with Pods, Deployments and Services already? Start here.
+source: https://training.linuxfoundation.org/certification/certified-kubernetes-administrator-cka/
+
+domains:
+  - id: cluster-architecture
+    title: Cluster Architecture, Installation & Configuration
+    weight: 25
+    competencies:
+      - { id: ca-rbac, text: Manage role based access control (RBAC) }
+      - { id: ca-infra, text: Prepare underlying infrastructure for installing a Kubernetes cluster }
+      - { id: ca-kubeadm, text: Create and manage Kubernetes clusters using kubeadm }
+      - { id: ca-lifecycle, text: Manage the lifecycle of Kubernetes clusters }
+      - { id: ca-ha, text: Implement and configure a highly-available control plane }
+      - { id: ca-helm-kustomize, text: Use Helm and Kustomize to install cluster components }
+      - { id: ca-interfaces, text: "Understand extension interfaces (CNI, CSI, CRI, etc.)" }
+      - { id: ca-crds-operators, text: "Understand CRDs, install and configure operators" }
+  - id: workloads-scheduling
+    title: Workloads & Scheduling
+    weight: 15
+    competencies:
+      - { id: ws-deployments, text: Understand application deployments and how to perform rolling update and rollbacks }
+      - { id: ws-config, text: Use ConfigMaps and Secrets to configure applications }
+      - { id: ws-autoscaling, text: Configure workload autoscaling }
+      - { id: ws-self-healing, text: "Understand the primitives used to create robust, self-healing, application deployments" }
+      - { id: ws-scheduling, text: "Configure Pod admission and scheduling (limits, node affinity, etc.)" }
+  - id: services-networking
+    title: Services & Networking
+    weight: 20
+    competencies:
+      - { id: sn-pod-connectivity, text: Understand connectivity between Pods }
+      - { id: sn-netpol, text: Define and enforce Network Policies }
+      - { id: sn-services, text: "Use ClusterIP, NodePort, LoadBalancer service types and endpoints" }
+      - { id: sn-gateway, text: Use the Gateway API to manage Ingress traffic }
+      - { id: sn-ingress, text: Know how to use Ingress controllers and Ingress resources }
+      - { id: sn-coredns, text: Understand and use CoreDNS }
+  - id: storage
+    title: Storage
+    weight: 10
+    competencies:
+      - { id: st-dynamic, text: Implement storage classes and dynamic volume provisioning }
+      - { id: st-volume-types, text: "Configure volume types, access modes and reclaim policies" }
+      - { id: st-pv-pvc, text: Manage persistent volumes and persistent volume claims }
+  - id: troubleshooting
+    title: Troubleshooting
+    weight: 30
+    competencies:
+      - { id: ts-clusters-nodes, text: Troubleshoot clusters and nodes }
+      - { id: ts-components, text: Troubleshoot cluster components }
+      - { id: ts-monitoring, text: Monitor cluster and application resource usage }
+      - { id: ts-output-streams, text: Manage and evaluate container output streams }
+      - { id: ts-networking, text: Troubleshoot services and networking }
+  # Not an exam domain: weight 0, no official competencies. Tools you meet the
+  # day after the exam — and the ones this platform itself is deployed with.
+  - id: platform-tools
+    title: "Beyond the CKA: Platform Tooling"
+    weight: 0
+    competencies: []
+
+modules:
+  # ---------------------------------------------------------------- foundations
+  - id: foundations-architecture
+    domain: cluster-architecture
+    title: How a Cluster Works
+    summary: The components of the control plane and the nodes, and the path a request takes from kubectl to a running container.
+    objectives:
+      - Name every control plane and node component and say what breaks when it is down
+      - Trace a kubectl apply through the API server, etcd, the scheduler and the kubelet
+      - Find where each component runs and where its configuration lives on a kubeadm cluster
+    competencies: [ca-interfaces]
+    lessons:
+      - id: architecture-control-plane
+        title: "The control plane: API server, etcd, scheduler, controller manager"
+        summary: What each control plane component owns, how they communicate only through the API server, and why etcd is the single source of truth.
+        minutes: 35
+        status: published
+      - id: architecture-node-components
+        title: "Worker nodes: kubelet, container runtime and kube-proxy"
+        summary: How the kubelet turns PodSpecs into containers through the CRI, and what kube-proxy actually programs on each node.
+        minutes: 30
+        status: planned
+      - id: architecture-request-lifecycle
+        title: "Following a request: from kubectl apply to a running container"
+        summary: Authentication, authorization, admission, persistence, scheduling and the kubelet sync loop, step by step.
+        minutes: 30
+        status: planned
+
+  - id: exam-workflow
+    domain: cluster-architecture
+    title: kubectl Fluency and Exam Workflow
+    summary: The command-line habits that save minutes on every task — the difference between finishing the exam and running out of time.
+    objectives:
+      - Generate manifests with imperative commands and --dry-run=client -o yaml
+      - Query any field with JSONPath and custom columns
+      - Switch contexts and namespaces deliberately on every task
+    competencies: []
+    lessons:
+      - id: kubectl-essentials
+        title: "kubectl efficiently: imperative commands, dry runs and explain"
+        summary: Create, generate and inspect resources fast; use kubectl explain instead of guessing field names.
+        minutes: 30
+        status: published
+      - id: kubectl-output-jsonpath
+        title: Output formats, JSONPath and custom columns
+        summary: Extract exactly the field a task asks for, sort output, and write results to files.
+        minutes: 25
+        status: planned
+      - id: exam-environment
+        title: "The exam environment: contexts, documentation and time management"
+        summary: How the remote desktop works, which docs you may use, and a strategy for 2 hours of tasks.
+        minutes: 15
+        status: planned
+
+  # ------------------------------------------------- cluster architecture (25%)
+  - id: rbac
+    domain: cluster-architecture
+    title: Authentication, Authorization and RBAC
+    summary: Who can do what in a cluster — users, ServiceAccounts, Roles, ClusterRoles and bindings.
+    objectives:
+      - Explain the authentication → authorization → admission chain
+      - Create Roles, ClusterRoles and bindings for users and ServiceAccounts
+      - Verify permissions with kubectl auth can-i and impersonation
+    competencies: [ca-rbac]
+    lessons:
+      - id: rbac-model
+        title: "Authentication, authorization and the RBAC model"
+        summary: "How the API server identifies a caller and decides whether a request is allowed."
+        minutes: 30
+        status: planned
+      - id: rbac-roles-bindings
+        title: "Roles, ClusterRoles and bindings in practice"
+        summary: "Namespaced vs cluster-wide permissions and the four valid role/binding combinations."
+        minutes: 35
+        status: planned
+      - id: service-accounts
+        title: "ServiceAccounts and workload identity"
+        summary: "Giving Pods an identity, projected tokens, and least privilege for workloads."
+        minutes: 25
+        status: planned
+      - id: rbac-troubleshooting
+        title: "Debugging permissions with kubectl auth can-i"
+        summary: "Reading Forbidden errors and testing permissions with impersonation."
+        minutes: 20
+        status: planned
+
+  - id: kubeadm-install
+    domain: cluster-architecture
+    title: Installing a Cluster with kubeadm
+    summary: Prepare Linux nodes and bootstrap a working cluster with kubeadm.
+    objectives:
+      - Prepare nodes (runtime, cgroup driver, kernel modules, sysctls, swap)
+      - Bootstrap a control plane with kubeadm init and join workers
+      - Understand the certificates and kubeconfigs kubeadm generates
+    competencies: [ca-infra, ca-kubeadm]
+    lessons:
+      - id: cluster-prerequisites
+        title: "Preparing nodes: container runtime, kernel modules, sysctls and swap"
+        summary: "Everything a node needs before kubeadm can run."
+        minutes: 30
+        status: planned
+      - id: kubeadm-init-join
+        title: "Bootstrapping a cluster with kubeadm init and join"
+        summary: "The phases of kubeadm init, installing a CNI, and joining worker nodes."
+        minutes: 40
+        status: planned
+      - id: kubeadm-configuration
+        title: "kubeadm configuration, certificates and kubeconfigs"
+        summary: "What lives in /etc/kubernetes and how kubeadm configures components."
+        minutes: 30
+        status: planned
+
+  - id: cluster-lifecycle
+    domain: cluster-architecture
+    title: Cluster Lifecycle and Maintenance
+    summary: Keep a cluster healthy over time — node maintenance, upgrades, etcd backups and certificates.
+    objectives:
+      - Drain and return nodes to service safely
+      - Upgrade a kubeadm cluster one minor version
+      - Back up and restore etcd with etcdctl / etcdutl
+    competencies: [ca-lifecycle]
+    lessons:
+      - id: node-maintenance
+        title: "Node maintenance: cordon, drain and uncordon"
+        summary: "Evicting workloads safely and what blocks a drain."
+        minutes: 20
+        status: planned
+      - id: kubeadm-upgrade
+        title: "Upgrading a cluster with kubeadm"
+        summary: "The upgrade order for control plane and workers, and version skew rules."
+        minutes: 40
+        status: planned
+      - id: etcd-backup-restore
+        title: "Backing up and restoring etcd"
+        summary: "Snapshots with etcdctl, restoring with etcdutl, and pointing the static Pod at restored data."
+        minutes: 40
+        status: planned
+      - id: certificate-management
+        title: "Certificate expiry and renewal"
+        summary: "Checking and renewing kubeadm-managed certificates."
+        minutes: 20
+        status: planned
+
+  - id: ha-control-plane
+    domain: cluster-architecture
+    title: Highly-Available Control Plane
+    summary: Remove the control plane as a single point of failure.
+    objectives:
+      - Compare stacked and external etcd topologies
+      - Build a multi-control-plane cluster behind a load balancer
+    competencies: [ca-ha]
+    lessons:
+      - id: ha-topologies
+        title: "HA topologies: stacked vs external etcd"
+        summary: "Quorum, failure tolerance and the trade-offs of each topology."
+        minutes: 25
+        status: planned
+      - id: ha-kubeadm
+        title: "Building an HA control plane with kubeadm"
+        summary: "controlPlaneEndpoint, uploading certificates and joining control plane nodes."
+        minutes: 35
+        status: planned
+
+  - id: helm-kustomize
+    domain: cluster-architecture
+    title: Helm and Kustomize
+    summary: Install and customise cluster components with the two standard packaging tools.
+    objectives:
+      - Install, upgrade, inspect and roll back Helm releases
+      - Build overlays and patches with Kustomize
+    competencies: [ca-helm-kustomize]
+    lessons:
+      - id: helm-basics
+        title: "Helm: charts, releases and values"
+        summary: "Repositories, chart structure and overriding values."
+        minutes: 30
+        status: planned
+      - id: helm-operations
+        title: "Installing, upgrading and rolling back releases"
+        summary: "The release lifecycle and inspecting what Helm deployed."
+        minutes: 25
+        status: planned
+      - id: kustomize
+        title: "Kustomize: bases, overlays and patches"
+        summary: "kubectl apply -k, overlays per environment and strategic merge patches."
+        minutes: 30
+        status: planned
+
+  - id: extending-kubernetes
+    domain: cluster-architecture
+    title: Extending Kubernetes
+    summary: The plug-in interfaces, custom resources, operators and admission control.
+    objectives:
+      - Explain what CRI, CNI and CSI each delegate
+      - Create a CRD and custom resources; install and configure an operator
+      - Describe how admission controllers and policies change or reject requests
+    competencies: [ca-interfaces, ca-crds-operators]
+    lessons:
+      - id: extension-interfaces
+        title: "CRI, CNI and CSI: how Kubernetes delegates"
+        summary: "The contracts that let Kubernetes work with any runtime, network and storage."
+        minutes: 25
+        status: planned
+      - id: crds
+        title: "CustomResourceDefinitions"
+        summary: "Extending the API with your own resource types."
+        minutes: 25
+        status: planned
+      - id: operators
+        title: "Installing and configuring operators"
+        summary: "Controllers that manage applications through custom resources."
+        minutes: 30
+        status: planned
+      - id: admission-control
+        title: "Admission controllers and policies"
+        summary: "Mutating and validating admission, and ValidatingAdmissionPolicy."
+        minutes: 25
+        status: planned
+
+  # ----------------------------------------------- workloads & scheduling (15%)
+  - id: deployments
+    domain: workloads-scheduling
+    title: Pods, Deployments and Rollouts
+    summary: Run applications with Deployments and change them safely.
+    objectives:
+      - Explain the Pod lifecycle and multi-container Pods
+      - Perform, pause, monitor and undo rolling updates
+      - Choose between RollingUpdate and Recreate and tune maxSurge/maxUnavailable
+    competencies: [ws-deployments]
+    lessons:
+      - id: pods-deep-dive
+        title: "Pods: the unit of scheduling"
+        summary: "Pod phases, container states, restart policy and shared namespaces."
+        minutes: 30
+        status: planned
+      - id: deployments-rollouts
+        title: "Deployments, ReplicaSets and rolling updates"
+        summary: "How a Deployment drives ReplicaSets during an update."
+        minutes: 35
+        status: planned
+      - id: rollbacks-strategies
+        title: "Rollbacks, revision history and update strategies"
+        summary: "kubectl rollout undo, change causes and strategy tuning."
+        minutes: 25
+        status: planned
+
+  - id: app-config
+    domain: workloads-scheduling
+    title: ConfigMaps and Secrets
+    summary: Separate configuration from images.
+    objectives:
+      - Create ConfigMaps and Secrets from literals, files and env files
+      - Consume them as environment variables and mounted files
+      - Know what Secrets do and do not protect
+    competencies: [ws-config]
+    lessons:
+      - id: configmaps
+        title: "ConfigMaps"
+        summary: "Creating ConfigMaps and the update semantics of each consumption method."
+        minutes: 25
+        status: planned
+      - id: secrets
+        title: "Secrets"
+        summary: "Secret types, base64 is not encryption, and encryption at rest."
+        minutes: 25
+        status: planned
+      - id: env-and-volumes-config
+        title: "Consuming configuration: env vars vs mounted files"
+        summary: "envFrom, valueFrom, projected volumes and live updates."
+        minutes: 25
+        status: planned
+
+  - id: self-healing
+    domain: workloads-scheduling
+    title: Self-Healing Workloads
+    summary: The primitives that keep applications running without a human.
+    objectives:
+      - Configure liveness, readiness and startup probes correctly
+      - Pick the right controller — DaemonSet, StatefulSet, Job, CronJob
+      - Use init containers, native sidecars and PodDisruptionBudgets
+    competencies: [ws-self-healing]
+    lessons:
+      - id: probes
+        title: "Liveness, readiness and startup probes"
+        summary: "What each probe controls and the classic misconfigurations."
+        minutes: 30
+        status: planned
+      - id: workload-controllers
+        title: "DaemonSets, StatefulSets, Jobs and CronJobs"
+        summary: "When a Deployment is the wrong tool."
+        minutes: 35
+        status: planned
+      - id: init-sidecar-containers
+        title: "Init containers and native sidecars"
+        summary: "Ordering startup and running helpers alongside the main container."
+        minutes: 25
+        status: planned
+      - id: disruption-budgets
+        title: "PodDisruptionBudgets and voluntary disruptions"
+        summary: "Keeping availability during drains and upgrades."
+        minutes: 20
+        status: planned
+
+  - id: scheduling
+    domain: workloads-scheduling
+    title: Scheduling and Admission
+    summary: Control where Pods run and how much they may use.
+    objectives:
+      - Set requests and limits and predict the QoS class
+      - Constrain namespaces with ResourceQuota and LimitRange
+      - Place Pods with node affinity, pod affinity, taints and tolerations
+    competencies: [ws-scheduling]
+    lessons:
+      - id: resources-limits
+        title: "Requests, limits and QoS classes"
+        summary: "How the scheduler uses requests and the kubelet enforces limits."
+        minutes: 30
+        status: planned
+      - id: quotas-limitranges
+        title: "ResourceQuota and LimitRange"
+        summary: "Namespace-level admission constraints."
+        minutes: 25
+        status: planned
+      - id: node-selection
+        title: "nodeSelector, node affinity and pod affinity"
+        summary: "Attracting and spreading Pods across nodes."
+        minutes: 35
+        status: planned
+      - id: taints-tolerations
+        title: "Taints and tolerations"
+        summary: "Repelling Pods from nodes, and the control plane taint."
+        minutes: 25
+        status: planned
+      - id: scheduling-advanced
+        title: "Topology spread, priority classes and static Pods"
+        summary: "Advanced placement and Pods the kubelet runs on its own."
+        minutes: 30
+        status: planned
+
+  - id: autoscaling
+    domain: workloads-scheduling
+    title: Workload Autoscaling
+    summary: Scale applications with demand.
+    objectives:
+      - Install and verify metrics-server
+      - Create and tune a HorizontalPodAutoscaler
+      - Explain vertical scaling and in-place Pod resize
+    competencies: [ws-autoscaling]
+    lessons:
+      - id: metrics-server
+        title: "Metrics Server and the resource metrics API"
+        summary: "Where kubectl top and the HPA get their numbers."
+        minutes: 20
+        status: planned
+      - id: hpa
+        title: "HorizontalPodAutoscaler"
+        summary: "Target utilisation, scaling behaviour and why requests are mandatory."
+        minutes: 30
+        status: planned
+      - id: vpa-overview
+        title: "Vertical scaling and in-place resize"
+        summary: "VPA concepts and resizing Pod resources without a restart."
+        minutes: 20
+        status: planned
+
+  # --------------------------------------------------- services & networking (20%)
+  - id: pod-networking
+    domain: services-networking
+    title: Pod Networking
+    summary: How every Pod reaches every other Pod.
+    objectives:
+      - State the Kubernetes network model's requirements
+      - Inspect Pod IPs, routes and the CNI configuration on a node
+    competencies: [sn-pod-connectivity]
+    lessons:
+      - id: k8s-network-model
+        title: "The Kubernetes network model"
+        summary: "Flat Pod networking, Pod CIDRs and what the CNI plugin must provide."
+        minutes: 30
+        status: planned
+      - id: cni-in-practice
+        title: "CNI plugins in practice"
+        summary: "Where CNI config lives, how plugins are invoked, and comparing popular plugins."
+        minutes: 25
+        status: planned
+
+  - id: services
+    domain: services-networking
+    title: Services and Endpoints
+    summary: Give a changing set of Pods one stable address — and debug it when it answers nothing.
+    objectives:
+      - Expose workloads with ClusterIP, NodePort, LoadBalancer and headless Services
+      - Explain how selectors, EndpointSlices and kube-proxy connect a Service to Pods
+      - Diagnose a Service with no endpoints, a wrong targetPort or a failing readiness probe
+    competencies: [sn-services]
+    lessons:
+      - id: services-fundamentals
+        title: "Services and ClusterIP: stable access to changing Pods"
+        summary: Why Pods need Services, how a ClusterIP Service selects Pods, and how to create and test one from inside the cluster.
+        minutes: 40
+        status: published
+      - id: service-types
+        title: NodePort, LoadBalancer and headless Services
+        summary: Exposing Services outside the cluster, what each type adds on top of ClusterIP, and when to skip the virtual IP entirely.
+        minutes: 35
+        status: published
+      - id: endpointslices
+        title: Endpoints, EndpointSlices and kube-proxy
+        summary: The objects that connect a Service to Pod IPs, readiness, and the rules kube-proxy programs on every node.
+        minutes: 30
+        status: published
+      - id: services-troubleshooting
+        title: Troubleshooting a Service that does not answer
+        summary: A systematic path from "connection refused" to the root cause — selectors, ports, readiness, DNS and policies.
+        minutes: 35
+        status: published
+
+  - id: coredns
+    domain: services-networking
+    title: CoreDNS and Service Discovery
+    summary: How names resolve inside a cluster.
+    objectives:
+      - Resolve Services and Pods by DNS name across namespaces
+      - Read and change the CoreDNS Corefile
+    competencies: [sn-coredns]
+    lessons:
+      - id: coredns-service-discovery
+        title: "DNS-based service discovery"
+        summary: "Service and Pod records, search domains and ndots."
+        minutes: 25
+        status: planned
+      - id: coredns-configuration
+        title: "Configuring and debugging CoreDNS"
+        summary: "The Corefile, plugins, stub domains and common failures."
+        minutes: 25
+        status: planned
+
+  - id: ingress
+    domain: services-networking
+    title: Ingress
+    summary: HTTP routing into the cluster with Ingress controllers.
+    objectives:
+      - Install an Ingress controller and route hosts and paths to Services
+      - Configure TLS and pathType correctly
+    competencies: [sn-ingress]
+    lessons:
+      - id: ingress-controllers
+        title: "Ingress controllers and Ingress resources"
+        summary: "Why an Ingress does nothing without a controller, and IngressClass."
+        minutes: 30
+        status: planned
+      - id: ingress-tls
+        title: "Ingress TLS, path types and rewrites"
+        summary: "TLS Secrets, Prefix vs Exact, and controller-specific annotations."
+        minutes: 25
+        status: planned
+
+  - id: gateway-api
+    domain: services-networking
+    title: Gateway API
+    summary: The role-oriented successor to Ingress.
+    objectives:
+      - Explain GatewayClass, Gateway and HTTPRoute ownership
+      - Route, split and redirect traffic with HTTPRoute
+    competencies: [sn-gateway]
+    lessons:
+      - id: gateway-api-model
+        title: "Gateway API: GatewayClass, Gateway and HTTPRoute"
+        summary: "The resource model and who owns which object."
+        minutes: 30
+        status: planned
+      - id: gateway-api-routing
+        title: "Traffic routing and migrating from Ingress"
+        summary: "Matches, filters, weighted backends and cross-namespace references."
+        minutes: 30
+        status: planned
+
+  - id: network-policies
+    domain: services-networking
+    title: Network Policies
+    summary: Restrict which Pods may talk to which.
+    objectives:
+      - Apply default-deny policies and allow specific flows
+      - Combine pod, namespace and ipBlock selectors correctly
+    competencies: [sn-netpol]
+    lessons:
+      - id: netpol-fundamentals
+        title: "NetworkPolicy fundamentals: isolation and default deny"
+        summary: "How a Pod becomes isolated and why policies are additive."
+        minutes: 30
+        status: planned
+      - id: netpol-patterns
+        title: "Ingress and egress rules, namespace and pod selectors"
+        summary: "The AND vs OR selector trap, DNS egress and common patterns."
+        minutes: 35
+        status: planned
+
+  # ------------------------------------------------------------------ storage (10%)
+  - id: volumes-pv-pvc
+    domain: storage
+    title: Volumes, PersistentVolumes and Claims
+    summary: Give Pods storage that outlives containers — and Pods.
+    objectives:
+      - Use emptyDir, hostPath and projected volumes
+      - Bind PersistentVolumeClaims to PersistentVolumes
+      - Choose access modes and reclaim policies
+    competencies: [st-volume-types, st-pv-pvc]
+    lessons:
+      - id: volumes
+        title: "Volumes: emptyDir, hostPath and projected"
+        summary: "Ephemeral volume types and their lifecycles."
+        minutes: 25
+        status: planned
+      - id: pv-pvc
+        title: "PersistentVolumes and PersistentVolumeClaims"
+        summary: "Static provisioning and the binding rules."
+        minutes: 35
+        status: planned
+      - id: access-modes-reclaim
+        title: "Access modes and reclaim policies"
+        summary: "RWO, ROX, RWX, RWOP and Retain vs Delete."
+        minutes: 20
+        status: planned
+
+  - id: storage-classes
+    domain: storage
+    title: StorageClasses and Dynamic Provisioning
+    summary: Storage on demand.
+    objectives:
+      - Create StorageClasses and provision volumes dynamically
+      - Use volumeClaimTemplates for stateful applications
+    competencies: [st-dynamic]
+    lessons:
+      - id: storageclasses
+        title: "StorageClasses and dynamic provisioning"
+        summary: "Provisioners, the default class and volumeBindingMode."
+        minutes: 30
+        status: planned
+      - id: statefulset-storage
+        title: "Stateful workloads and volumeClaimTemplates"
+        summary: "Stable storage identity per replica."
+        minutes: 25
+        status: planned
+
+  # ----------------------------------------------------------- troubleshooting (30%)
+  - id: troubleshooting-method
+    domain: troubleshooting
+    title: Troubleshooting Method, Logs and Events
+    summary: A repeatable approach and the evidence to collect first.
+    objectives:
+      - Follow a top-down troubleshooting method under time pressure
+      - Read logs of current, previous and multi-container Pods, and events
+    competencies: [ts-output-streams]
+    lessons:
+      - id: troubleshooting-methodology
+        title: "A troubleshooting method for the exam"
+        summary: "From symptom to root cause without guessing."
+        minutes: 20
+        status: planned
+      - id: logs-and-events
+        title: "Logs, events and container output streams"
+        summary: "kubectl logs flags, events, and where container logs live on a node."
+        minutes: 30
+        status: planned
+
+  - id: troubleshoot-workloads
+    domain: troubleshooting
+    title: Troubleshooting Applications
+    summary: Pods that will not start and rollouts that will not finish.
+    objectives:
+      - Diagnose Pending, CrashLoopBackOff, ImagePullBackOff and CreateContainerConfigError
+      - Find why a rollout is stuck
+    competencies: []
+    lessons:
+      - id: troubleshoot-pods
+        title: "Pods that won't start: Pending, CrashLoopBackOff, ImagePullBackOff"
+        summary: "Each failure state, what causes it and where the evidence is."
+        minutes: 35
+        status: planned
+      - id: troubleshoot-deployments
+        title: "Failed rollouts and misconfigured workloads"
+        summary: "Stuck rollouts, quota rejections and bad probes."
+        minutes: 25
+        status: planned
+
+  - id: troubleshoot-nodes
+    domain: troubleshooting
+    title: Troubleshooting Nodes
+    summary: NotReady nodes and the services underneath.
+    objectives:
+      - Diagnose a NotReady node via the kubelet and container runtime
+      - Use systemctl, journalctl and crictl on a node
+    competencies: [ts-clusters-nodes]
+    lessons:
+      - id: troubleshoot-nodes-kubelet
+        title: "NotReady nodes and the kubelet"
+        summary: "Node conditions, kubelet configuration and its logs."
+        minutes: 30
+        status: planned
+      - id: troubleshoot-node-runtime
+        title: "Container runtime and crictl"
+        summary: "Inspecting containers when the API cannot help."
+        minutes: 25
+        status: planned
+
+  - id: troubleshoot-control-plane
+    domain: troubleshooting
+    title: Troubleshooting the Control Plane
+    summary: When the cluster itself is broken.
+    objectives:
+      - Repair broken static Pod manifests of control plane components
+      - Check etcd health and recover from common etcd failures
+    competencies: [ts-components]
+    lessons:
+      - id: troubleshoot-control-plane-components
+        title: "Static Pod control plane failures"
+        summary: "API server, scheduler and controller manager failure signatures."
+        minutes: 35
+        status: planned
+      - id: troubleshoot-etcd
+        title: "etcd health and recovery"
+        summary: "etcdctl endpoint health, certificates and data directory issues."
+        minutes: 25
+        status: planned
+
+  - id: resource-monitoring
+    domain: troubleshooting
+    title: Monitoring Resource Usage
+    summary: Find who is using what.
+    objectives:
+      - Use kubectl top and node conditions to find resource pressure
+      - Identify OOMKilled containers and evictions
+    competencies: [ts-monitoring]
+    lessons:
+      - id: resource-monitoring-basics
+        title: "Monitoring resource usage: kubectl top, pressure and evictions"
+        summary: "Reading usage against requests and limits."
+        minutes: 30
+        status: planned
+
+  - id: troubleshoot-networking
+    domain: troubleshooting
+    title: Troubleshooting Services and Networking
+    summary: Connectivity failures end to end.
+    objectives:
+      - Isolate a failure to DNS, Service, endpoints, policy or the Pod itself
+      - Debug from inside the cluster with ephemeral containers
+    competencies: [ts-networking]
+    lessons:
+      - id: troubleshoot-service-dns
+        title: "Service and DNS failures"
+        summary: "Layer-by-layer checks from client Pod to backend."
+        minutes: 30
+        status: planned
+      - id: troubleshoot-network-policies
+        title: "NetworkPolicy and connectivity failures"
+        summary: "Finding the policy that blocks a flow."
+        minutes: 25
+        status: planned
+
+  # --------------------------------------- beyond the CKA: platform tooling (0%)
+  # Not tested in the exam. Each module uses this platform's own deployment
+  # (deploy/helm, deploy/argocd) as the running example.
+  - id: helm-in-depth
+    domain: platform-tools
+    title: Helm in Depth — Writing Your Own Charts
+    summary: Go from installing other people's charts to packaging your own applications, using this platform's chart as the worked example.
+    objectives:
+      - Structure a chart with templates, helpers and a values schema
+      - Manage dependencies, hooks and chart tests
+      - Package and publish charts to an OCI registry
+    competencies: []
+    lessons:
+      - id: helm-chart-anatomy
+        title: "Chart anatomy: Chart.yaml, templates, values and helpers"
+        summary: How Helm renders templates, the built-in objects, and naming conventions that keep releases independent.
+        minutes: 35
+        status: planned
+      - id: helm-templating
+        title: Templating techniques that stay readable
+        summary: Conditionals, ranges, named templates, required values and values.schema.json validation.
+        minutes: 35
+        status: planned
+      - id: helm-dependencies-hooks
+        title: Dependencies, hooks and chart tests
+        summary: Subcharts, pre-install/pre-upgrade hooks for migrations, and helm test.
+        minutes: 30
+        status: planned
+      - id: helm-oci-release
+        title: Packaging and publishing charts to an OCI registry
+        summary: helm package, helm push, versioning charts versus app versions, and helm lint in CI.
+        minutes: 25
+        status: planned
+
+  - id: traefik
+    domain: platform-tools
+    title: Traefik as Ingress and Gateway Controller
+    summary: Run Traefik in front of your applications — standard Ingress, Gateway API and Traefik's own CRDs — with TLS and middlewares.
+    objectives:
+      - Install Traefik with Helm and expose it through a Service
+      - Route with Ingress, Gateway API and IngressRoute, and know when to use which
+      - Add TLS (including ACME) and middlewares such as redirects, headers and rate limits
+    competencies: []
+    lessons:
+      - id: traefik-architecture
+        title: "Traefik architecture: entrypoints, routers, services and providers"
+        summary: How Traefik discovers routes from Kubernetes and the vocabulary it uses.
+        minutes: 30
+        status: planned
+      - id: traefik-install-routing
+        title: Installing Traefik and routing with Ingress and Gateway API
+        summary: The Helm install, IngressClass, and serving the same app through both APIs.
+        minutes: 35
+        status: planned
+      - id: traefik-ingressroute-middlewares
+        title: IngressRoute CRDs and middlewares
+        summary: Traefik-native routing, redirects, headers, rate limiting and their portability trade-off.
+        minutes: 30
+        status: planned
+      - id: traefik-tls
+        title: TLS with Traefik — certificates and ACME
+        summary: TLS secrets, cert-manager versus Traefik's built-in ACME, and HTTP-to-HTTPS redirection.
+        minutes: 30
+        status: planned
+
+  - id: argocd
+    domain: platform-tools
+    title: GitOps with Argo CD
+    summary: Let Git drive the cluster — declarative continuous delivery with Argo CD, deploying this platform as the example.
+    objectives:
+      - Explain GitOps and the reconciliation loop Argo CD runs
+      - Create Applications from Helm charts and Kustomize overlays with automated sync
+      - Scale out with app-of-apps and ApplicationSets, and lock access down with Argo CD RBAC
+    competencies: []
+    lessons:
+      - id: gitops-principles
+        title: "GitOps principles: desired state in Git, reconciled by the cluster"
+        summary: Push versus pull delivery, drift, and why GitOps fits Kubernetes' controller model.
+        minutes: 25
+        status: planned
+      - id: argocd-install-first-app
+        title: Installing Argo CD and deploying a first Application
+        summary: The Argo CD components, the CLI and UI, and an Application pointing at a Git path.
+        minutes: 35
+        status: planned
+      - id: argocd-sync-helm-kustomize
+        title: Sync policies, health and Helm/Kustomize sources
+        summary: Automated sync, self-heal, prune, sync waves and hooks, and rendering Helm or Kustomize.
+        minutes: 35
+        status: planned
+      - id: argocd-app-of-apps
+        title: App-of-apps, ApplicationSets and multi-environment delivery
+        summary: Managing many applications and clusters declaratively, with promotion between environments.
+        minutes: 30
+        status: planned
+      - id: argocd-security
+        title: Argo CD projects, RBAC and secrets
+        summary: AppProjects as guard rails, SSO and RBAC, and keeping secrets out of Git.
+        minutes: 25
+        status: planned

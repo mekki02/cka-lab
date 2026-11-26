@@ -1,0 +1,86 @@
+id: ckad-ex-daemonset
+title: "One agent per node"
+module: ckad-workloads
+lesson: ckad-workload-types
+kind: exercise
+difficulty: beginner
+minutes: 10
+order: 1
+tags: [daemonset, statefulset, deployment]
+namespaces: [ex-agents]
+statement: |
+  A monitoring team needs an agent on **every node** of the cluster, including nodes added later.
+
+  1. In namespace `ex-agents`, create a **DaemonSet** `node-agent`: image `busybox:1.36`, command
+     `sleep infinity`, Pod label `app=node-agent`. There is no `kubectl create daemonset`: generate a
+     Deployment and turn it into a DaemonSet.
+  2. Make sure it runs one ready Pod per node (`k get nodes` shows how many).
+  3. Answer the two questions below.
+inputs:
+  - id: db
+    label: "A PostgreSQL cluster: each instance needs its own disk and a stable name. Which resource?"
+    kind: choice
+    options:
+      - { id: a, text: Deployment }
+      - { id: b, text: StatefulSet }
+      - { id: c, text: DaemonSet }
+      - { id: d, text: Job }
+  - id: api
+    label: "A stateless REST API, 4 interchangeable copies, updated several times a day. Which resource?"
+    kind: choice
+    options:
+      - { id: a, text: Deployment }
+      - { id: b, text: StatefulSet }
+      - { id: c, text: DaemonSet }
+      - { id: d, text: CronJob }
+checks:
+  - id: is-daemonset
+    description: node-agent is a DaemonSet running busybox:1.36
+    type: cluster
+    command: kubectl -n ex-agents get daemonset node-agent -o jsonpath='{.spec.template.spec.containers[0].image}'
+    expect: busybox:1.36
+    match: exact
+  - id: sleeps
+    description: Its container runs sleep infinity
+    type: cluster
+    command: kubectl -n ex-agents get daemonset node-agent -o jsonpath='{.spec.template.spec.containers[0].command} {.spec.template.spec.containers[0].args}'
+    expect: '"sleep",\s*"infinity"'
+    match: regex
+  - id: one-per-node
+    description: One ready Pod per node
+    type: cluster
+    command: 'n=$(kubectl get nodes --no-headers | wc -l); kubectl -n ex-agents get daemonset node-agent -o jsonpath="{.status.numberReady}/{.status.desiredNumberScheduled}/$n"'
+    expect: '^([1-9][0-9]*)/\1/\1$'
+    match: regex
+  - id: db
+    description: Stateful, clustered software
+    type: answer
+    input: db
+    expect: b
+  - id: api
+    description: Stateless, frequently updated software
+    type: answer
+    input: api
+    expect: a
+hints:
+  - "`k -n ex-agents create deployment node-agent --image=busybox:1.36 $do -- sleep infinity > ds.yaml` — the generated label is already `app=node-agent`."
+  - "In the file: `kind: DaemonSet`, and delete `replicas:`, `strategy: {}` and `status: {}`."
+solution: |
+  ```bash
+  k -n ex-agents create deployment node-agent --image=busybox:1.36 $do -- sleep infinity > ds.yaml
+  sed -i 's/kind: Deployment/kind: DaemonSet/; /replicas:/d; /strategy: {}/d; /^status: {}/d' ds.yaml
+  k apply -f ds.yaml
+  k -n ex-agents get ds node-agent      # DESIRED = number of nodes
+  ```
+
+  A database instance needs a stable identity and its own volume — **StatefulSet**. A stateless API is the
+  textbook **Deployment**: interchangeable Pods and rolling updates.
+autotest:
+  solve: |
+    kubectl -n ex-agents create deployment node-agent --image=busybox:1.36 --dry-run=client -o yaml -- sleep infinity > /tmp/ds.yaml
+    sed -i 's/kind: Deployment/kind: DaemonSet/; /replicas:/d; /strategy: {}/d; /^status: {}/d' /tmp/ds.yaml
+    kubectl apply -f /tmp/ds.yaml
+    kubectl -n ex-agents rollout status ds/node-agent --timeout=120s
+  answers:
+    db: b
+    api: a

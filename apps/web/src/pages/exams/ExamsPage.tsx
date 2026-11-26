@@ -5,35 +5,47 @@ import { useExamAttemptsQuery, useExamsQuery, useStartExamMutation } from '@/api
 import { errorMessage } from '@/api/baseQuery';
 import { EmptyState, ErrorState, Loading, PageHeader } from '@/components/states';
 import { Markdown } from '@/components/Markdown';
+import { CourseSwitcher } from '@/components/CourseSwitcher';
+import { useSelectedCourse } from '@/hooks/useSelectedCourse';
 
 export const SIMULATION_NOTICE =
-  'Simulated practice exam. Scores are self-assessed from the checks you confirm on your own cluster. They are not CKA certification results and do not predict your real score.';
+  'Simulated practice exam. Scores are self-assessed from the checks you confirm on your own cluster. They are not certification results and do not predict your real score.';
 
 export const ExamsPage = () => {
   const { data: exams, error, isLoading, refetch } = useExamsQuery();
   const { data: attempts } = useExamAttemptsQuery();
   const [start, startState] = useStartExamMutation();
   const navigate = useNavigate();
+  const { course } = useSelectedCourse();
 
   if (error) return <ErrorState error={error} onRetry={refetch} />;
-  if (isLoading || !exams) return <Loading />;
+  if (isLoading || !exams || !course) return <Loading />;
+  const shown = exams.filter(e => e.courseId === course.id);
+  const courseExamIds = new Set(shown.map(e => e.id));
 
   const open = new Map((attempts ?? []).filter(a => !a.submittedAt).map(a => [a.examId, a]));
-  const finished = (attempts ?? []).filter(a => a.submittedAt);
+  const finished = (attempts ?? []).filter(a => a.submittedAt && courseExamIds.has(a.examId));
 
   return (
     <Box sx={{ maxWidth: 1100, mx: 'auto' }}>
-      <PageHeader overline="Exam practice" title="Mock exams" subtitle="Timed, performance-based tasks in the style of the CKA. Work in your own cluster, verify each task with the provided checks, and review solutions afterwards." />
+      <PageHeader
+        overline={`${course.code} exam practice`}
+        title="Mock exams"
+        subtitle={`Timed, performance-based tasks in the style of the ${course.code}. Work in your own cluster, verify each task with the provided checks, and review solutions afterwards.`}
+        actions={<CourseSwitcher />}
+      />
       <Alert severity="info" sx={{ mb: 3 }}>
         {SIMULATION_NOTICE}
       </Alert>
       {startState.error && <Alert severity="error" sx={{ mb: 2 }}>{errorMessage(startState.error)}</Alert>}
 
-      {exams.length === 0 ? (
-        <EmptyState icon={<TimerOutlinedIcon fontSize="inherit" />} title="No mock exams yet" />
+      {shown.length === 0 ? (
+        <EmptyState icon={<TimerOutlinedIcon fontSize="inherit" />} title={`No ${course.code} mock exam yet`}>
+          It is written once the course covers every domain. Until then, every module ends with challenges.
+        </EmptyState>
       ) : (
         <Grid container spacing={2}>
-          {exams.map(e => {
+          {shown.map(e => {
             const resume = open.get(e.id);
             return (
               <Grid key={e.id} size={{ xs: 12, md: 6 }}>

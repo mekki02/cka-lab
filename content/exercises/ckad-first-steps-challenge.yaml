@@ -1,0 +1,110 @@
+id: ckad-first-steps-challenge
+title: "Challenge: a report Pod, by the spec"
+module: ckad-first-steps
+kind: challenge
+difficulty: intermediate
+minutes: 15
+order: 1
+tags: [pods, yaml, labels, env]
+namespaces: [ex-report]
+setup: |
+  kubectl -n ex-report create deployment frontend --image=nginx:1.27 --replicas=2
+statement: |
+  Work in namespace `ex-report`. Save your manifest as `~/ckad-first-steps-challenge/report.yaml`.
+
+  Create a Pod `report` that:
+
+  - runs image `busybox:1.36` and prints `report for <TEAM>` once, where `<TEAM>` comes from an
+    environment variable `TEAM` set to `payments`, then **stays Completed**;
+  - has the labels `app=report` and `tier=batch`;
+  - has the annotation `description=weekly report`.
+
+  Then answer: what is the **IP address** of one of the `frontend` Pods right now?
+inputs:
+  - id: frontend-ip
+    label: IP address of a frontend Pod
+    placeholder: 10.x.x.x
+checks:
+  - id: file
+    description: ~/ckad-first-steps-challenge/report.yaml defines the Pod report
+    type: file
+    path: ckad-first-steps-challenge/report.yaml
+    expect: 'kind: Pod[\s\S]*name: report'
+    match: regex
+  - id: output
+    description: report printed "report for payments"
+    type: cluster
+    command: kubectl -n ex-report logs report
+    expect: report for payments
+    match: contains
+  - id: env
+    description: TEAM is an environment variable of the container
+    type: cluster
+    command: kubectl -n ex-report get pod report -o jsonpath='{.spec.containers[0].env[?(@.name=="TEAM")].value}'
+    expect: payments
+    match: exact
+  - id: completed
+    description: report is Completed and never restarts
+    type: cluster
+    command: kubectl -n ex-report get pod report -o jsonpath='{.spec.restartPolicy} {.status.phase}'
+    expect: '^(Never|OnFailure) Succeeded$'
+    match: regex
+  - id: labels
+    description: report is labelled app=report, tier=batch
+    type: cluster
+    command: kubectl -n ex-report get pods -l app=report,tier=batch -o name
+    expect: pod/report
+    match: exact
+  - id: annotation
+    description: report has the annotation description=weekly report
+    type: cluster
+    command: kubectl -n ex-report get pod report -o jsonpath='{.metadata.annotations.description}'
+    expect: weekly report
+    match: exact
+  - id: frontend-ip
+    description: You found a frontend Pod IP
+    type: answer
+    input: frontend-ip
+    # Any one of the Pod IPs: the command prints a regex like ^(10\.0\.0\.5|10\.0\.0\.6)$
+    expectCommand: kubectl -n ex-report get pods -l app=frontend -o jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}' | grep . | sed 's/\./\\./g' | paste -sd'|' - | sed 's/^/^(/; s/$/)$/'
+    match: regex
+hints:
+  - "The shell expands `$TEAM` only if a shell runs: the command must be `sh -c 'echo report for $TEAM'`."
+  - "Generate with `k -n ex-report run report --image=busybox:1.36 --restart=Never --env=TEAM=payments --labels=app=report,tier=batch $do -- sh -c 'echo report for $TEAM'`, then add `metadata.annotations`."
+solution: |
+  ```bash
+  mkdir -p ~/ckad-first-steps-challenge
+  k -n ex-report run report --image=busybox:1.36 --restart=Never --env=TEAM=payments \
+    --labels=app=report,tier=batch $do -- sh -c 'echo report for $TEAM' > ~/ckad-first-steps-challenge/report.yaml
+  vim ~/ckad-first-steps-challenge/report.yaml
+  ```
+
+  ```yaml
+  metadata:
+    annotations:
+      description: weekly report
+    labels:
+      app: report
+      tier: batch
+    name: report
+    namespace: ex-report
+  ```
+
+  ```bash
+  k apply -f ~/ckad-first-steps-challenge/report.yaml
+  k -n ex-report logs report
+  k -n ex-report get pods -l app=frontend -o wide
+  ```
+
+  The single quotes matter: with double quotes, **your** shell would expand `$TEAM` (to nothing) before
+  kubectl ever sees it.
+autotest:
+  solve: |
+    mkdir -p ~/ckad-first-steps-challenge
+    kubectl -n ex-report run report --image=busybox:1.36 --restart=Never --env=TEAM=payments --labels=app=report,tier=batch --dry-run=client -o yaml -- sh -c 'echo report for $TEAM' > ~/ckad-first-steps-challenge/report.yaml
+    yq -i '.metadata.annotations.description = "weekly report"' ~/ckad-first-steps-challenge/report.yaml
+    kubectl apply -f ~/ckad-first-steps-challenge/report.yaml
+    kubectl -n ex-report wait --for=jsonpath='{.status.phase}'=Succeeded pod/report --timeout=120s
+    kubectl -n ex-report rollout status deploy frontend --timeout=120s
+  answers:
+    frontend-ip: "$(kubectl -n ex-report get pods -l app=frontend -o jsonpath='{.items[0].status.podIP}')"

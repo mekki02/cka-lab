@@ -30,7 +30,7 @@ import { Link as RouterLink, Outlet, useLocation, useNavigate } from 'react-rout
 import type { UserDto } from '@cka/contracts';
 import { useLogoutMutation } from '@/api/api';
 import { APP_NAME, LABS_ENABLED } from '@/config';
-import { DOCK_WIDTH, TerminalBridgeProvider, TerminalDockPanel, TerminalDockToggle, useTerminalDock } from '@/labs/TerminalDock';
+import { TerminalBridgeProvider, TerminalDockPanel, TerminalDockToggle, useTerminalDock } from '@/labs/TerminalDock';
 import { useThemeMode } from '@/theme/ThemeModeProvider';
 import { NAV_SECTIONS } from './nav';
 import { SearchButton } from './SearchDialog';
@@ -90,7 +90,7 @@ const SidebarContent = ({ user, onNavigate }: { user: UserDto; onNavigate: () =>
       </Box>
       <Divider />
       <Typography variant="caption" color="text.secondary" sx={{ p: 2 }}>
-        Practice platform. Simulated scores are not CKA certification results.
+        Practice platform. Simulated scores are not CKA or CKAD certification results.
       </Typography>
     </Box>
   );
@@ -211,12 +211,12 @@ export const AppShell = ({ user }: { user: UserDto }) => {
 
       <Box component="main" sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <Toolbar />
-        <Box sx={{ flex: 1, px: { xs: 2, sm: 3, lg: 4 }, py: { xs: 2, md: 4 }, mr: { md: dockOpen ? DOCK_WIDTH : 0 } }}>
+        <Box sx={{ flex: 1, px: { xs: 2, sm: 3, lg: 4 }, py: { xs: 2, md: 4 }, mr: { md: dockOpen ? `${dock.width}px` : 0 } }}>
           <TerminalBridgeProvider open={dockOpen} bridge={dockOpen ? dock.bridge : null}>
             <Outlet />
           </TerminalBridgeProvider>
         </Box>
-        {dockOpen && <TerminalDockPanel onClose={() => dock.setOpen(false)} setPaste={dock.setPaste} />}
+        {dockOpen && <TerminalDockPanel onClose={() => dock.setOpen(false)} setPaste={dock.setPaste} width={dock.width} setWidth={dock.setWidth} />}
       </Box>
     </Box>
   );

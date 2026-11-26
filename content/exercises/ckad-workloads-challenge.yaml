@@ -1,0 +1,126 @@
+id: ckad-workloads-challenge
+title: "Challenge: the failed migration and the cache"
+module: ckad-workloads
+kind: challenge
+difficulty: intermediate
+minutes: 20
+order: 1
+tags: [jobs, statefulset, debugging]
+namespaces: [ex-release]
+setup: |
+  cat <<'YAML' | kubectl apply -f -
+  apiVersion: batch/v1
+  kind: Job
+  metadata:
+    name: migrate
+    namespace: ex-release
+  spec:
+    backoffLimit: 1
+    template:
+      spec:
+        restartPolicy: Never
+        containers:
+        - name: migrate
+          image: busybox:1.36
+          command: ["sh", "-c", "echo 'applying 042_add_orders.sql'; echo \"ERROR: relation $(echo Y3VzdG9tZXJz | base64 -d) does not exist\" >&2; exit 2"]
+  YAML
+  kubectl -n ex-release wait --for=condition=Failed job/migrate --timeout=150s
+statement: |
+  A release in namespace `ex-release` went wrong.
+
+  1. The Job `migrate` **failed**. Find out (a) the `reason` of its `Failed` condition, and (b) which
+     database relation the migration script complained about.
+  2. The team fixed the script. Create a new Job `migrate-v2` that runs `busybox:1.36` with
+     `sh -c 'echo migrated'`, retries failed containers **inside the same Pod**, and must finish within
+     **60** seconds. It must complete.
+  3. The release also needs a cache: a **StatefulSet** `cache` with **2** replicas of `busybox:1.36`
+     running `sleep infinity`, Pod label `app=cache`, and a **headless** Service `cache` (selector `app=cache`, port 6379) as its
+     governing service, so that the Pods get stable DNS names.
+inputs:
+  - id: reason
+    label: Reason of migrate's Failed condition
+    placeholder: CamelCase
+  - id: relation
+    label: Relation the migration complained about
+checks:
+  - id: reason
+    description: You found why the Job controller gave up
+    type: answer
+    input: reason
+    expect: BackoffLimitExceeded
+  - id: relation
+    description: You read the failed Pod's logs
+    type: answer
+    input: relation
+    expect: customers
+    match: contains
+  - id: v2-complete
+    description: migrate-v2 completed
+    type: cluster
+    command: kubectl -n ex-release get job migrate-v2 -o jsonpath='{.status.succeeded}'
+    expect: "1"
+    match: number
+  - id: v2-spec
+    description: migrate-v2 restarts containers OnFailure and has a 60 s deadline
+    type: cluster
+    command: kubectl -n ex-release get job migrate-v2 -o jsonpath='{.spec.template.spec.restartPolicy} {.spec.activeDeadlineSeconds}'
+    expect: OnFailure 60
+    match: exact
+  - id: headless
+    description: Service cache is headless and selects app=cache
+    type: cluster
+    command: kubectl -n ex-release get svc cache -o jsonpath='{.spec.clusterIP} {.spec.selector.app}'
+    expect: None cache
+    match: exact
+  - id: sts
+    description: StatefulSet cache uses the Service cache and has 2 ready replicas
+    type: cluster
+    command: kubectl -n ex-release get statefulset cache -o jsonpath='{.spec.serviceName} {.status.readyReplicas}'
+    expect: cache 2
+    match: exact
+  - id: stable-names
+    description: Pods cache-0 and cache-1 exist
+    type: cluster
+    command: kubectl -n ex-release get pods -l app=cache -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'
+    expect: |
+      cache-0
+      cache-1
+    match: lines
+hints:
+  - "`k -n ex-release describe job migrate` shows the conditions; `k -n ex-release logs -l job-name=migrate` shows what the Pods printed."
+  - "Retrying inside the same Pod is `restartPolicy: OnFailure` in the Pod template."
+  - "`k -n ex-release create service clusterip cache --clusterip=None --tcp=6379:6379` creates a headless Service with selector `app=cache`."
+  - "Generate a Deployment `cache`, change the kind to StatefulSet, add `serviceName: cache`, delete `strategy: {}` and `status: {}`."
+solution: |
+  ```bash
+  k -n ex-release get job migrate -o jsonpath='{.status.conditions[?(@.type=="Failed")].reason}'   # BackoffLimitExceeded
+  k -n ex-release logs -l job-name=migrate        # relation "customers" does not exist
+
+  k -n ex-release create job migrate-v2 --image=busybox:1.36 $do -- sh -c 'echo migrated' > v2.yaml
+  # spec.activeDeadlineSeconds: 60   and   spec.template.spec.restartPolicy: OnFailure
+  k apply -f v2.yaml
+
+  k -n ex-release create service clusterip cache --clusterip=None --tcp=6379:6379
+  k -n ex-release create deployment cache --image=busybox:1.36 --replicas=2 $do -- sleep infinity > sts.yaml
+  # kind: StatefulSet, add spec.serviceName: cache, remove strategy and status
+  k apply -f sts.yaml
+  k -n ex-release get pods -l app=cache          # cache-0, cache-1
+  ```
+
+  With `backoffLimit: 1` the controller allowed one retry; both Pods exited with code 2, so the Job failed with
+  `BackoffLimitExceeded`. With `restartPolicy: Never` the failed Pods are kept — that is why you can still
+  read their logs.
+autotest:
+  solve: |
+    kubectl -n ex-release create job migrate-v2 --image=busybox:1.36 --dry-run=client -o yaml -- sh -c 'echo migrated' > /tmp/v2.yaml
+    yq -i '.spec.activeDeadlineSeconds = 60 | .spec.template.spec.restartPolicy = "OnFailure"' /tmp/v2.yaml
+    kubectl apply -f /tmp/v2.yaml
+    kubectl -n ex-release create service clusterip cache --clusterip=None --tcp=6379:6379
+    kubectl -n ex-release create deployment cache --image=busybox:1.36 --replicas=2 --dry-run=client -o yaml -- sleep infinity > /tmp/sts.yaml
+    yq -i '.kind = "StatefulSet" | .spec.serviceName = "cache" | del(.spec.strategy) | del(.status)' /tmp/sts.yaml
+    kubectl apply -f /tmp/sts.yaml
+    kubectl -n ex-release wait --for=condition=complete job/migrate-v2 --timeout=120s
+    kubectl -n ex-release rollout status sts/cache --timeout=150s
+  answers:
+    reason: BackoffLimitExceeded
+    relation: customers

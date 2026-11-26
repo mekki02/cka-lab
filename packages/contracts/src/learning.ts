@@ -5,14 +5,12 @@
  */
 import type { ExerciseSummaryDto } from './exercises';
 
-export type ExamDomainId =
-  | 'cluster-architecture'
-  | 'workloads-scheduling'
-  | 'services-networking'
-  | 'storage'
-  | 'troubleshooting'
-  /** Beyond the exam (Helm authoring, Traefik, Argo CD…). Weight 0. */
-  | 'platform-tools';
+/**
+ * Domain ids are unique across courses ("services-networking" is CKA,
+ * "ckad-services-networking" is CKAD). Weight-0 domains are tracks beyond the
+ * exam (Helm authoring, Traefik, Argo CD…).
+ */
+export type ExamDomainId = string;
 
 export interface Competency {
   id: string;
@@ -22,6 +20,7 @@ export interface Competency {
 
 export interface ExamDomain {
   id: ExamDomainId;
+  courseId: string;
   title: string;
   /** Weight in the official exam blueprint, in percent. 0 = not an exam domain. */
   weight: number;
@@ -41,6 +40,7 @@ export interface CurriculumLesson {
 
 export interface CurriculumModule {
   id: string;
+  courseId: string;
   domain: ExamDomainId;
   title: string;
   summary: string;
@@ -55,12 +55,28 @@ export interface CurriculumModule {
   minutes: number;
 }
 
+/** A certification track (CKA, CKAD) with its own domains and modules. */
+export interface Course {
+  id: string;
+  /** Exam code: "CKA", "CKAD". */
+  code: string;
+  title: string;
+  summary: string;
+  audience: string;
+  source: string;
+  /** Module ids in learning order. */
+  moduleIds: string[];
+}
+
 export interface Curriculum {
   version: string;
   /** Kubernetes minor version the content was written against, e.g. "1.37". */
   kubernetesVersion: string;
-  source: string;
+  /** In display order. */
+  courses: Course[];
+  /** Every course's domains (see `courseId`). */
   domains: ExamDomain[];
+  /** Every course's modules, course by course, in learning order. */
   modules: CurriculumModule[];
 }
 
@@ -193,6 +209,7 @@ export interface QuizAttemptDto {
 
 export interface ExamSummaryDto {
   id: string;
+  courseId: string;
   title: string;
   description: string;
   durationMinutes: number;
@@ -260,7 +277,9 @@ export interface DomainProgressDto {
   quizAverage: number | null;
 }
 
-export interface DashboardDto {
+/** Everything the dashboard shows about one course. */
+export interface CourseProgressDto {
+  courseId: string;
   totals: {
     lessonsPublished: number;
     lessonsCompleted: number;
@@ -273,11 +292,8 @@ export interface DashboardDto {
     quizzesTotal: number;
   };
   domains: DomainProgressDto[];
-  currentModuleId: string | null;
+  /** First published, not completed lesson whose prerequisites are done. */
   nextLessonId: string | null;
-  recent: { lessonId: string; visitedAt: string }[];
-  inProgressLabs: string[];
-  recentQuizAttempts: QuizAttemptDto[];
   weakAreas: { domain: ExamDomainId; reason: string }[];
   lastExam: { examId: string; percent: number; submittedAt: string; passPercent: number } | null;
   /**
@@ -286,4 +302,15 @@ export interface DashboardDto {
    * exam result.
    */
   readiness: number;
+}
+
+export interface DashboardDto {
+  /** In catalogue order. */
+  courses: CourseProgressDto[];
+  /** The course of the last visited lesson (null before any visit). */
+  currentCourseId: string | null;
+  currentModuleId: string | null;
+  recent: { lessonId: string; visitedAt: string }[];
+  inProgressLabs: string[];
+  recentQuizAttempts: QuizAttemptDto[];
 }

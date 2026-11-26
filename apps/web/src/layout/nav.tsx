@@ -26,7 +26,7 @@ export const NAV_SECTIONS: { title?: string; items: NavItem[] }[] = [
   {
     items: [
       { label: 'Dashboard', to: '/', icon: <DashboardOutlinedIcon /> },
-      { label: 'Course', to: '/learn', icon: <SchoolOutlinedIcon />, prefix: true },
+      { label: 'Courses', to: '/learn', icon: <SchoolOutlinedIcon />, prefix: true },
       { label: 'Exercises', to: '/exercises', icon: <FitnessCenterIcon />, prefix: true },
       { label: 'Labs', to: '/labs', icon: <ScienceOutlinedIcon />, prefix: true },
       ...(LABS_ENABLED ? [{ label: 'Playground', to: '/playground', icon: <TerminalIcon /> }] : []),

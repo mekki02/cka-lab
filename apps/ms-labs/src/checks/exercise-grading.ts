@@ -69,7 +69,7 @@ export const exerciseClusterScript = (e: RunnableExercise, allExerciseNamespaces
   // Force-deleting the Pods frees the quota at once; the namespace finishes terminating on its own.
   const wipe = (v: string, wait: boolean) => `if [ -n "$${v}" ]; then
   for n in $${v}; do kubectl -n "$n" delete pods --all --grace-period=0 --force >/dev/null 2>&1 || true; done
-  kubectl delete namespace $${v} ${wait ? '--wait=true --timeout=150s' : '--wait=false'}
+  kubectl delete namespace $${v} --ignore-not-found ${wait ? '--wait=true --timeout=150s' : '--wait=false'}
 fi`;
   return [
     'set -e',
